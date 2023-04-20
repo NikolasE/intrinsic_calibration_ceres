@@ -1,5 +1,6 @@
 #include "ceres_calibration/ceres_intrinsic_calib.h"
 #include <iostream>
+#include <math.h>
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -19,7 +20,7 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    std::cout << "Found " << img_with_view_cnt << " pattern views" << " out of " << img_cnt << std::endl;
 
 
-   ceres::Problem problem;
+   
    // one pose per image
    // TODO: read image size and set cx, cy to the center of the image
 
@@ -31,21 +32,35 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
 
    // double pattern_pose[6*all_image_points.size()];
 
-   // init first nine parameters for camera intrinsics
-   size_t param_block_size = 9 + 6*all_image_points.size(); 
-   double parameters[param_block_size] = {initial_focal_length, initial_focal_length, 1280/2, 720/2, 0.0, 0.0, 0.0, 0.0, 0.0};
 
-   for (size_t i=0; i<all_image_points.size(); i++) {
+   size_t param_cnt_intrinsics = 4;
+   // size_t param_cnt_intrinsics = 9;
+   
+
+   size_t used_image_cnt = 3; // all_image_points.size();
+
+
+   // init first nine parameters for camera intrinsics
+   size_t param_block_size = param_cnt_intrinsics + 6*used_image_cnt;
+   double parameters[param_block_size] = {initial_focal_length, initial_focal_length, 1280/2, 720/2}; //, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+
+   // problem.AddParameterBlock(parameters, param_block_size);
+
+
+
+   for (size_t i=0; i<all_image_points.size() && i<used_image_cnt; i++) 
+   {
       cv::Mat rvec, tvec;
       get_initial_pose(all_image_points[i], rvec, tvec);
-      all_tvecs.push_back(tvec);
-      all_rvecs.push_back(rvec);
+      // all_tvecs.push_back(tvec);
+      // all_rvecs.push_back(rvec);
 
-      cout << "Rot " << rvec.at<double>(0) << " " << rvec.at<double>(1) << " " << rvec.at<double>(2) << endl;
-      cout << "Tra " << tvec.at<double>(0) << " " << tvec.at<double>(1) << " " << tvec.at<double>(2) << endl;
+      // cout << "Rot " << rvec.at<double>(0) << " " << rvec.at<double>(1) << " " << rvec.at<double>(2) << endl;
+      // cout << "Tra " << tvec.at<double>(0) << " " << tvec.at<double>(1) << " " << tvec.at<double>(2) << endl;
 
 
-      size_t start_index = 9+i*6; // TODO: nicer version
+      size_t start_index = param_cnt_intrinsics+i*6; // TODO: nicer version
 
       // TODO: get rid of magic number
       parameters[start_index+0]=rvec.at<double>(0);
@@ -55,18 +70,35 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       parameters[start_index+4]=tvec.at<double>(1);
       parameters[start_index+5]=tvec.at<double>(2);
 
-      // parameter block for the pattern pose in this image
-      // TODO: verify that Ceres and OpenCV use the same definition
-      // TODO: keep in scope?
 
+      // setParameterBounds(parameters, start_index+0, -M_PI, M_PI);
+      // setParameterBounds(parameters, start_index+1, -M_PI, M_PI);
+      // setParameterBounds(parameters, start_index+2, -M_PI, M_PI);
+      // setParameterBounds(parameters, start_index+3, -1, 1);
+      // setParameterBounds(parameters, start_index+4, -1, 1);
+      // setParameterBounds(parameters, start_index+5, 0, 1);
+   }
+
+
+
+   for (size_t i=0; i<all_image_points.size() && i<used_image_cnt; i++) 
+   {
+    size_t start_index = param_cnt_intrinsics+i*6;
       problem.AddResidualBlock(
          PatternViewReprojectionError::Create(metric_pattern_points, all_image_points[i]),
          nullptr, // squared loss
          parameters + start_index,
          parameters // intrinsics at beginning of parameter array
       );
+   }
 
- }
+   // setParameterBounds(parameters, 0, 800,1200);   // fx with 20% tolerance
+   // setParameterBounds(parameters, 1, 800,1200);   // fy 
+   // setParameterBounds(parameters, 2, 550,650);   // cx 
+   // setParameterBounds(parameters, 3, 300,390);   // cy 
+
+
+
 
    // for (size_t i=0; i<param_block_size; ++i)
    // {
@@ -80,13 +112,19 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
 
    ceres::Solver::Options options;
    options.minimizer_progress_to_stdout = true;
+   // options.linear_solver_type = ceres::DENSE_SCHUR;
+   // options.max_num_iterations = 1;
    ceres::Solver::Summary summary;
 
    ceres::Solve(options, &problem, &summary);
 
    std::cout << summary.FullReport() << std::endl;
+
+   for (size_t i=0; i<param_block_size && i<11; ++i)
+   {
+      cout << i << "  " << parameters[i] << endl;
+   }
    
-   cout << "initial cost: " << summary.initial_cost << std::endl;
 
 }
 
@@ -188,10 +226,10 @@ bool RunIntrinsicCalibration::extract_pattern(const std::filesystem::path& img_p
       return false;
    }
 
-   cv::Mat img_cp;
-   cv::cvtColor(img, img_cp, cv::COLOR_GRAY2RGB);
-   cv::drawChessboardCorners(img_cp, pattern_shape, image_points, found);
-   cv::imwrite("pattern_" + img_path.filename().string(), img_cp);
+   // cv::Mat img_cp;
+   // cv::cvtColor(img, img_cp, cv::COLOR_GRAY2RGB);
+   // cv::drawChessboardCorners(img_cp, pattern_shape, image_points, found);
+   // cv::imwrite("pattern_" + img_path.filename().string(), img_cp);
 
 
    return true;
