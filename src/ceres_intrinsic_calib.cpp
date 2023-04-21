@@ -7,26 +7,26 @@ namespace fs = std::filesystem;
 #include <boost/range/combine.hpp>
 
 RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& img_directory,
-                                  size_t pattern_width, size_t pattern_height,
+                                  uint pattern_width, uint pattern_height,
                                   double square_size,
                                   double focal_length): 
                                   pattern_shape(pattern_width, pattern_height),
                                   square_size(square_size),
-                                  initial_focal_length(focal_length) 
+                                  initial_focal_length(focal_length)
 {
+
+   printf("Starting optimization for %ix%i pattern with size of %.fmm and focal length of %.1f, looking for images in %s\n",
+          pattern_width, pattern_height, square_size*1000, focal_length, img_directory.c_str());
+
+
+   // create debug-directory, include focal length in name
+   debug_directory = img_directory / ("debug_f"+std::to_string(int(focal_length)));
+   fs::create_directories(debug_directory);
+
+
    metric_pattern_points = RunIntrinsicCalibration::init_flat_asymmetric_pattern(pattern_shape, square_size);
-   size_t img_cnt;
-   size_t img_with_view_cnt = collect_pattern_views(img_directory, img_cnt);
-   std::cout << "Found " << img_with_view_cnt << " pattern views" << " out of " << img_cnt << std::endl;
+   double initial_mean_error = collect_pattern_views(img_directory);
 
-
-   
-   // one pose per image
-   // TODO: read image size and set cx, cy to the center of the image
-
-   // parameter block for camera intrinsics (standard k-matrix, no prior for distortion)
-   // this block is shared between all residuals
-   // double intrinsics[]; = {initial_focal_length, initial_focal_length, 1280/2, 720/2, 0.0, 0.0, 0.0, 0.0, 0.0};
 
    std::vector<cv::Mat> all_rvecs, all_tvecs;
 
@@ -37,95 +37,129 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    // size_t param_cnt_intrinsics = 9;
    
 
-   size_t used_image_cnt = 3; // all_image_points.size();
+   size_t used_capture_cnt = captures.size(); // or smaller for debugging
 
 
-   // init first nine parameters for camera intrinsics
-   size_t param_block_size = param_cnt_intrinsics + 6*used_image_cnt;
-   double parameters[param_block_size] = {initial_focal_length, initial_focal_length, 1280/2, 720/2}; //, 0.0, 0.0, 0.0, 0.0, 0.0};
+   // init first parameters for camera intrinsics
+   size_t param_block_size = param_cnt_intrinsics + 6*used_capture_cnt;
+   
+   // focal length and principal point are scaled by image size so that all parameters are in the same range
+   double parameters[param_block_size] = {focal_length/width, focal_length/height, 0.5, 0.5}; 
 
 
-   // problem.AddParameterBlock(parameters, param_block_size);
-
-
-
-   for (size_t i=0; i<all_image_points.size() && i<used_image_cnt; i++) 
+   // use initial pose as initial guess for optimization
+   for (size_t i=0; i<used_capture_cnt; i++)
    {
-      cv::Mat rvec, tvec;
-      get_initial_pose(all_image_points[i], rvec, tvec);
-      // all_tvecs.push_back(tvec);
-      // all_rvecs.push_back(rvec);
+      const Capture& cap = captures[i];
+      size_t start_index = param_cnt_intrinsics+i*6; 
 
-      // cout << "Rot " << rvec.at<double>(0) << " " << rvec.at<double>(1) << " " << rvec.at<double>(2) << endl;
-      // cout << "Tra " << tvec.at<double>(0) << " " << tvec.at<double>(1) << " " << tvec.at<double>(2) << endl;
-
-
-      size_t start_index = param_cnt_intrinsics+i*6; // TODO: nicer version
-
-      // TODO: get rid of magic number
-      parameters[start_index+0]=rvec.at<double>(0);
-      parameters[start_index+1]=rvec.at<double>(1);
-      parameters[start_index+2]=rvec.at<double>(2);
-      parameters[start_index+3]=tvec.at<double>(0);
-      parameters[start_index+4]=tvec.at<double>(1);
-      parameters[start_index+5]=tvec.at<double>(2);
-
-
-      // setParameterBounds(parameters, start_index+0, -M_PI, M_PI);
-      // setParameterBounds(parameters, start_index+1, -M_PI, M_PI);
-      // setParameterBounds(parameters, start_index+2, -M_PI, M_PI);
-      // setParameterBounds(parameters, start_index+3, -1, 1);
-      // setParameterBounds(parameters, start_index+4, -1, 1);
-      // setParameterBounds(parameters, start_index+5, 0, 1);
+      for (int i: {0,1,2})
+      {
+         parameters[start_index+i] = cap.rvec_initial.at<double>(i);
+         parameters[start_index+i+3] = cap.tvec_initial.at<double>(i);
+      }
    }
 
-
-
-   for (size_t i=0; i<all_image_points.size() && i<used_image_cnt; i++) 
+   // add one residual block per pattern view
+   for (size_t i=0; i<used_capture_cnt; i++)
    {
-    size_t start_index = param_cnt_intrinsics+i*6;
+      const Capture& cap = captures[i];
+      size_t start_index = param_cnt_intrinsics+i*6;
+
       problem.AddResidualBlock(
-         PatternViewReprojectionError::Create(metric_pattern_points, all_image_points[i]),
+         PatternViewReprojectionError::CreateNoDistortion(metric_pattern_points, cap.observed_points, width, height),
          nullptr, // squared loss
          parameters + start_index,
          parameters // intrinsics at beginning of parameter array
       );
+
+      for (int i: {0,1,2})
+      {
+         setParameterBounds(parameters, start_index+i, -M_PI, M_PI); // if required, set after AddResidualBlock!
+         setParameterBounds(parameters, start_index+i+3, -1, 1);
+      }
+      setParameterBounds(parameters, start_index+5, 0, 1); // z always positive
+
    }
 
-   // setParameterBounds(parameters, 0, 800,1200);   // fx with 20% tolerance
-   // setParameterBounds(parameters, 1, 800,1200);   // fy 
-   // setParameterBounds(parameters, 2, 550,650);   // cx 
-   // setParameterBounds(parameters, 3, 300,390);   // cy 
+   setParameterBounds(parameters, 0, 0.3);   // fx with 30% tolerance
+   setParameterBounds(parameters, 1, 0.3);   // fy 
+   setParameterBounds(parameters, 2, 0.45, 0.55);   // cx 
+   setParameterBounds(parameters, 3, 0.45, 0.55);   // cy 
 
 
+   cout << "Optimizing with " << used_capture_cnt << " pattern views" << endl;
 
+   // copy parameters-array to compare later
+   double parameters_copy[param_block_size];
+   memccpy(parameters_copy, parameters, param_block_size, sizeof(double));
 
-   // for (size_t i=0; i<param_block_size; ++i)
-   // {
-   //    cout << i << "  " << parameters[i] << endl;
-   // }
-
-
-
-
-   cout << "Optimizing with " << all_rvecs.size() << " pattern views" << endl;
 
    ceres::Solver::Options options;
    options.minimizer_progress_to_stdout = true;
-   // options.linear_solver_type = ceres::DENSE_SCHUR;
-   // options.max_num_iterations = 1;
+   options.linear_solver_type = ceres::DENSE_SCHUR;
+   options.max_num_iterations = 2000;
    ceres::Solver::Summary summary;
 
    ceres::Solve(options, &problem, &summary);
 
    std::cout << summary.FullReport() << std::endl;
 
-   for (size_t i=0; i<param_block_size && i<11; ++i)
-   {
-      cout << i << "  " << parameters[i] << endl;
-   }
-   
+   cout << "fx " << parameters[0]*width << endl;
+   cout << "fy " << parameters[1]*height << endl;
+   cout << "cx " << parameters[2]*width << endl;
+   cout << "cy " << parameters[3]*height << endl;
 
+
+   // for (size_t i=0; i<param_block_size; ++i)
+   // {
+   //    cout << i << "  " << parameters_copy[i] << " -> " << parameters[i] << endl;
+   // }
+   
+   // recompute reprojection error to compare with result of Ceres (should prove that we use the same Rodrigues definition)
+   cv::Mat camera_matrix = cv::Mat::eye(3, 3, CV_64F);
+   camera_matrix.at<double>(0, 0) = parameters[0]*width;
+   camera_matrix.at<double>(1, 1) = parameters[1]*height;
+   camera_matrix.at<double>(0, 2) = parameters[2]*width;
+   camera_matrix.at<double>(1, 2) = parameters[3]*height;
+
+
+   // double total_err = 0;
+
+   // for (size_t i=0; i<used_capture_cnt; ++i)
+   // {
+   //    size_t start_index = param_cnt_intrinsics+i*6;
+
+   //    cv::Mat rvec = cv::Mat(1,3, CV_64F);
+   //    rvec.at<double>(0) = parameters[start_index + 0];
+   //    rvec.at<double>(1) = parameters[start_index + 1];
+   //    rvec.at<double>(2) = parameters[start_index + 2];
+      
+   //    cv::Mat tvec = cv::Mat(1,3, CV_64F);
+   //    tvec.at<double>(0) = parameters[start_index + 3];
+   //    tvec.at<double>(1) = parameters[start_index + 4];
+   //    tvec.at<double>(2) = parameters[start_index + 5];
+      
+   //    std::vector<cv::Point2f> projected_points;
+   //    cv::projectPoints(metric_pattern_points, rvec, tvec, camera_matrix, cv::Mat(), projected_points);
+
+   //    double err_sum = 0;
+   //    for (auto tup: boost::combine(projected_points, all_image_points[i]))
+   //    {
+   //       cv::Point2f reprojected, measured;
+   //       boost::tie(reprojected, measured) = tup;
+   //       double err = pow(cv::norm(reprojected - measured),2);
+   //       err_sum += err;
+   //    }
+
+   //    double mean_error = sqrt(err_sum / projected_points.size());
+   //    cout << "mean error " << i << "  : " << mean_error << endl;
+
+   //    total_err += mean_error;
+   // }
+
+
+   // cout << "total error after ceres " << total_err/used_capture_cnt << endl;
 }
 
 
@@ -136,103 +170,204 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
  * @param rvec resulting rodriques vector
  * @param tvec resulting translation vector
  */
-void RunIntrinsicCalibration::get_initial_pose(const std::vector<cv::Point2f>& image_points, cv::Mat& rvec, cv::Mat& tvec)
+double RunIntrinsicCalibration::get_initial_pose(Capture& cap)
 {
-   cv::Mat camera_matrix = cv::Mat::eye(3, 3, CV_64F);
-   camera_matrix.at<double>(0, 0) = initial_focal_length;
-   camera_matrix.at<double>(1, 1) = initial_focal_length;
-   camera_matrix.at<double>(0, 2) = 1280/2; // TODO: magic number
-   camera_matrix.at<double>(1, 2) = 720/2;
+   // make sure that init_flat_asymmetric_pattern (or similar function) was called before
+   assert(cap.observed_points.size() == metric_pattern_points.size());
 
    // run solvePnP without distortion and focal length provided by user
    // we could use less points to speed up computation
-   bool success = cv::solvePnP(metric_pattern_points, image_points, camera_matrix, cv::Mat(), rvec, tvec);
+   bool success = cv::solvePnP(metric_pattern_points, cap.observed_points, K_initial, cv::Mat(), cap.rvec_initial, cap.tvec_initial);
 
    if (!success) {
-      std::cout << "solvePnP failed" << std::endl;
-      assert(false); // crash is better than unhandled error
+      cout << "solvePnP failed" << endl;
+      assert(false); // crash is better than unhandled error. We'd need to remove the Capture in this case
    }
 
-   // compute reprojection error:
-   std::vector<cv::Point2f> projected_points;
-   cv::projectPoints(metric_pattern_points, rvec, tvec, camera_matrix, cv::Mat(), projected_points);
 
+   double z = cap.tvec_initial.at<double>(2);
+   if (z<0 || z > 2)
+   {
+      cerr << "estimated z value for pattern pose in image " << cap.filename << " is " << z << endl;
+      cerr << "this looks wrong, adjust initial focal length or debug further" << endl;
+      cerr << "This is really unexpected. Please report this issue to the calibration team" << endl;
+      exit(23);
+   }
+
+
+   // compute reprojection error:
+   double error = update_initial_error(cap);
+
+   if (error > 30)
+   {
+      cerr << "initial pose error for image " << cap.filename << " is quite high: " << error << endl;
+      cerr << "consider adapting the initial focal length" << endl;
+   }
+
+   return error;
+}
+
+double RunIntrinsicCalibration::update_initial_error(Capture& cap)
+{
+   bool use_initial_pose = true;
+   cap.initial_error = get_error(cap, use_initial_pose, K_initial);
+   return cap.initial_error;
+}
+
+double RunIntrinsicCalibration::update_optimized_error(Capture& cap)
+{
+   bool use_initial_pose = false;
+   cap.optimized_error = get_error(cap, use_initial_pose, K_optimized, dist_coeffs_optimized);
+   return cap.optimized_error;
+}
+
+double RunIntrinsicCalibration::get_error(Capture& cap, bool initial, cv::Mat cam_matrix, const cv::Mat dist_coeffs)
+{
+   assert(metric_pattern_points.size() == cap.observed_points.size());
+   assert(metric_pattern_points.size() > 0);
+
+   cv::Mat& rvec = initial ? cap.rvec_initial : cap.rvec_opt;
+   cv::Mat& tvec = initial ? cap.tvec_initial : cap.tvec_opt;
+
+   assert(!rvec.empty());
+
+   if (cam_matrix.empty())
+   {
+      cam_matrix = K_initial;
+   }
+
+   std::vector<cv::Point2f>& projected_points = initial ? cap.projected_initial : cap.projected_opt;
+   cv::projectPoints(metric_pattern_points, rvec, tvec, cam_matrix, dist_coeffs, projected_points);
 
    double err_sum = 0;
-   for (auto tup: boost::combine(projected_points, image_points))
+   cv::Point2f reprojected, observed;
+   for (auto tup: boost::combine(projected_points, cap.observed_points))
    {
-      cv::Point2f reprojected, measured;
-      boost::tie(reprojected, measured) = tup;
-      err_sum += cv::norm(reprojected - measured);
+      boost::tie(reprojected, observed) = tup;
+      err_sum += pow(cv::norm(reprojected - observed),2); // TODO: decide if we want square or not
    }
 
    double mean_error = err_sum / projected_points.size();
-
-   if (mean_error > 20)
-   {
-      cerr << "Warning: initial pose has high reprojection error: " << mean_error << endl;
-      cerr << "you could consider to change the initial focal length" << endl;
-   }
-
+   return mean_error;
 }
 
-
-
-size_t RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::path& img_directory, size_t& num_images_in_dir)
+double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::path& img_directory, size_t* num_images_in_dir)
 {
-   all_image_points.clear();
+   captures.clear();
+   double err_sum = 0;
 
-   num_images_in_dir = 0;
+   size_t img_cnt = 0;
+   // TODO: maybe support some regex
    for (const auto& entry : std::filesystem::directory_iterator(img_directory)) 
    {
-      if (entry.path().extension() == ".png" || entry.path().extension() == ".jpg"){
-         num_images_in_dir++;
-         std::vector<cv::Point2f> image_points;
-         if (extract_pattern(entry.path(), pattern_shape, image_points)) 
+      if (!(entry.path().extension() == ".png" || entry.path().extension() == ".jpg"))
+      {
+         continue;
+      }
+
+      img_cnt++;
+
+      Capture cap(entry.path());
+
+      // read image
+      cap.img = cv::imread(entry.path().string(), cv::IMREAD_COLOR);
+      if (cap.img.empty()) 
+      {
+         std::cerr << "Could not read image: " << entry.path() << std::endl;
+         continue;
+      }
+
+      // check if this is the first image, in this case remember size and compare other images against it
+      if (captures.empty())
+      {
+         width = cap.img.cols;
+         height = cap.img.rows;
+         cout << "Found first image with size: " << width << " x " << height << endl;
+
+         // initial camera matrix
+         K_initial = cv::Mat::eye(3, 3, CV_64F);
+         K_initial.at<double>(0, 0) = initial_focal_length;
+         K_initial.at<double>(1, 1) = initial_focal_length;
+         K_initial.at<double>(0, 2) = width/2; 
+         K_initial.at<double>(1, 2) = height/2;
+      }else
+      {
+         if (width != cap.img.cols || height != cap.img.rows)
          {
-
-            cv::Mat rvec, tvec;
-            get_initial_pose(image_points, rvec, tvec);
-
-            auto z_dist = tvec.at<double>(2);
-
-            if (z_dist < 0.1 || z_dist > 1.0) {
-               cout << "for image " << entry.path() << endl;
-               std::cout << "z translation " << ": " << z_dist << " is out of range, skipping" << std::endl;
-               continue;
-            }
-
-            all_image_points.push_back(image_points);
+            std::cerr << "Image " << entry.path() << " has different size than previous images" << std::endl;
+            // or terminate completely?
+            continue;
          }
       }
+
+      // get pixel positions of circles
+      if (!extract_pattern(cap))
+      {
+         // cerr << "no pattern found in image " << cap.filename << endl;
+         continue;
+      }
+
+      // compute initial position and its error
+      double err = get_initial_pose(cap);
+
+      // we now have a capture with one visible pattern and an initial pose
+      captures.push_back(cap);
+
+
+      double z = cap.tvec_initial.at<double>(2);
+
+      printf("initial error: %zu %.2f with z-distance of %.2f\n", captures.size()-1, err, z);
+      err_sum += err;      
    }
 
-   return all_image_points.size();
+   if (captures.empty())
+   {
+      cerr << "could not find any images with patterns in " << img_directory << endl;
+      exit(1);
+   }
+
+   double mean_error = err_sum / captures.size();
+
+   cout << "Found " << captures.size() << " images with patterns in " << img_cnt << " images" << endl;
+
+   // should be done within the loop, but this looks fancy
+   double max_error = std::max_element(captures.begin(), captures.end(), [](const Capture& a, const Capture& b) { return a.initial_error < b.initial_error; })->initial_error;
+
+   printf("mean error: %.2f, max error: %.2f\n", mean_error, max_error);
+
+   if (num_images_in_dir){ *num_images_in_dir = img_cnt;}
+   return mean_error;
 }
 
 
 
-bool RunIntrinsicCalibration::extract_pattern(const std::filesystem::path& img_path, cv::Size pattern_shape, std::vector<cv::Point2f>& image_points) 
+bool RunIntrinsicCalibration::extract_pattern(Capture& cap) 
 {
-   cv::Mat img = cv::imread(img_path.string(), cv::IMREAD_GRAYSCALE);
-   if (img.empty()) {
-      std::cerr << "Could not read image: " << img_path << std::endl;
-      return false;
+   cap.pattern_visible = cv::findCirclesGrid(cap.img, pattern_shape, cap.observed_points, cv::CALIB_CB_ASYMMETRIC_GRID);
+
+   { // create debug image
+      cv::Mat img_cp = cap.img.clone();
+      cv::drawChessboardCorners(img_cp, pattern_shape, cap.observed_points, cap.pattern_visible);
+
+      std::string debug_file_name;
+
+      if (cap.pattern_visible)
+      {
+         // show first two points to make order visible
+         cv::circle(img_cp, cap.observed_points[0], 10, cv::Scalar(0, 0, 255), 2);
+         cv::circle(img_cp, cap.observed_points[1], 10, cv::Scalar(0, 255, 0), 2);
+         debug_file_name = debug_directory/("pattern" + cap.filename+".png");
+      }else
+      {
+         // otherwise print text to show that image was processed
+         cv::putText(img_cp, "pattern not visible", cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
+         debug_file_name = debug_directory/("no_pattern" + cap.filename+".png");
+      }
+
+      cv::imwrite(debug_file_name, img_cp);
    }
-
-   bool found = cv::findCirclesGrid(img, pattern_shape, image_points, cv::CALIB_CB_ASYMMETRIC_GRID);
-   if (!found) {
-      std::cerr << "Could not find pattern in image: " << img_path << std::endl;
-      return false;
-   }
-
-   // cv::Mat img_cp;
-   // cv::cvtColor(img, img_cp, cv::COLOR_GRAY2RGB);
-   // cv::drawChessboardCorners(img_cp, pattern_shape, image_points, found);
-   // cv::imwrite("pattern_" + img_path.filename().string(), img_cp);
-
-
-   return true;
+   
+   return cap.pattern_visible;
 }
 
 

@@ -21,7 +21,13 @@ int main(int argc, char** argv) {
   // TODO: add interface to shape and size of pattern, or read from a config file in the directory
 
 
-  RunIntrinsicCalibration calib = RunIntrinsicCalibration(p, 4, 15, 0.035, 1000);
+  // 1200: mean error: 0.52
+  // 2000: 18.65
+  // 800: 27.16
+  // 1000: 6.34
+
+
+  RunIntrinsicCalibration calib = RunIntrinsicCalibration(p, 4, 15, 0.035, 1500);
 
 
 
