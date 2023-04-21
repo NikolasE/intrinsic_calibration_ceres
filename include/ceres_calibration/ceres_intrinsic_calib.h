@@ -45,24 +45,11 @@ struct PatternViewReprojectionError {
         const T& cx = camera_intrinsics[2]*T(width);
         const T& cy = camera_intrinsics[3]*T(height);
 
-
-        // std::cout << "fx: " << fx << std::endl;
-        // std::cout << "fy: " << fy << std::endl;
-        // std::cout << "cx: " << cx << std::endl;
-        // std::cout << "cy: " << cy << std::endl;
-
         // const T& k1 = camera_intrinsics[4];
         // const T& k2 = camera_intrinsics[5];
         // const T& p1 = camera_intrinsics[6];
         // const T& p2 = camera_intrinsics[7];
         // const T& k3 = camera_intrinsics[8];
-
-        // std::cout << "in_cam_frame: " << pattern_pose[0] << " " << pattern_pose[1] << " " << pattern_pose[2] << std::endl;
-        // std::cout << "trans " << pattern_pose[3] << " " << pattern_pose[4] << " " << pattern_pose[5] << std::endl;
-
-        // T sum_x = T(0);
-        // T sum_y = T(0);
-
 
         for (int i = 0; i < metric_pattern_points.size(); ++i) {
 
@@ -74,12 +61,6 @@ struct PatternViewReprojectionError {
             in_cam_frame[0] += pattern_pose[3];
             in_cam_frame[1] += pattern_pose[4];
             in_cam_frame[2] += pattern_pose[5];
-
-
-            // if (pattern_pose[5] < 0)
-            // {
-            //     std::cout << "z negative " << pattern_pose[5] << std::endl; 
-            // }
 
             T x = in_cam_frame[0] / in_cam_frame[2];
             T y = in_cam_frame[1] / in_cam_frame[2];
@@ -180,6 +161,9 @@ public:
 
 
     void visualize_projections(const Capture& cap);
+
+
+    void opencv_calibrate_camera(bool optimize_distortion = false);
 
 
     /**

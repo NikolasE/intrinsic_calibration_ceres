@@ -157,6 +157,10 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       visualize_projections(c);
    }
 
+   cout << "Running OpenCV Calibration for comparison" << endl;
+   opencv_calibrate_camera();
+
+
    // TODO: write results to file
 }
 
@@ -432,4 +436,51 @@ void RunIntrinsicCalibration::visualize_projections(const Capture& cap)
    }
    string filename = debug_directory/("projections__" + cap.filename+".png");
    cv::imwrite(filename, img_cp);
+}
+
+void RunIntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
+{
+   vector<vector<cv::Point3f>> object_points;
+   vector<vector<cv::Point2f>> image_points;
+   vector<cv::Mat> rvecs, tvecs;
+   // vector<double> per_view_errors;
+   
+   for (size_t i = 0; i < captures.size(); ++i)
+   {
+      object_points.push_back(metric_pattern_points); // same for all
+      image_points.push_back(captures[i].observed_points);
+      rvecs.push_back(captures[i].rvec_initial); // CALIB_USE_EXTRINSIC_GUESS
+      tvecs.push_back(captures[i].tvec_initial);
+   }
+
+   cv::Size image_size = cv::Size(width, height);
+
+
+   cv::Mat dist;
+   int flags = cv::CALIB_USE_INTRINSIC_GUESS | cv::CALIB_USE_EXTRINSIC_GUESS;
+   if (optimize_distortion)
+   {
+      dist = cv::Mat::zeros(5, 1, CV_64F); 
+   }else{
+      flags |= cv::CALIB_FIX_K1 | cv::CALIB_FIX_K2 | cv::CALIB_FIX_K3 | cv::CALIB_FIX_K4 | cv::CALIB_FIX_K5 | cv::CALIB_ZERO_TANGENT_DIST;    
+   }
+
+   cv::Mat K = K_initial.clone();
+
+   double rms = cv::calibrateCamera(object_points, image_points, image_size, K, dist, rvecs, tvecs, flags);
+
+   cout << "RMS error reported by cv::calibrateCamera: " << rms << endl;
+   cout << "Optimized K matrix: " << endl << K << endl;
+
+
+   // copy results to captures
+   // for (size_t i = 0; i < captures.size(); ++i)
+   // {
+   //    captures[i].rvec_opt = rvecs[i];
+   //    captures[i].tvec_opt = tvecs[i];
+   // }
+
+
+
+   // TODO: copy rvec, tvec to capture, redo evaluation
 }
