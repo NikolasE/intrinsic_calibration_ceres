@@ -27,6 +27,11 @@ target_link_libraries(ceres_intrinsic_calib ${OpenCV_LIBS} ${CERES_LIBRARIES} ${
 add_executable(run_calib main.cpp)
 target_link_libraries(run_calib ceres_intrinsic_calib)
 
+
+add_executable(capture_images src/image_capture.cpp)
+target_link_libraries(capture_images ${OpenCV_LIBS})
+
+
 # set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 # set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 # include(CPack)
