@@ -104,11 +104,12 @@ struct PatternViewReprojectionError {
             T y_diff = v - T(measured_image_points[i].y);
 
             T sq_error = x_diff * x_diff + y_diff * y_diff;
-            sum_of_squares += sq_error;
+            error[i] = sq_error;
+            // sum_of_squares += sq_error;
         }
 
         // error computes as in RunIntrinsicCalibration::get_error
-        *error = sum_of_squares / T(metric_pattern_points.size());
+        // *error = sum_of_squares / T(metric_pattern_points.size());
 
         // std::cout << "root mean_squared_error: " << *mean_squared_error << std::endl;
         return true;
@@ -118,8 +119,8 @@ struct PatternViewReprojectionError {
                                        const std::vector<cv::Point2f>& image_points, uint width, uint height) {
         // 3+3 = 6 pose parameters (rvec, tvec)
         // 9 intrinsic parameters (fx, fy, cx, cy, k1, k2, p1, p2, k3)
-        // 1 mean reprojection error
-        return (new ceres::AutoDiffCostFunction<PatternViewReprojectionError, 1, 6, 4>( // 1,6,9
+        // 15*4: reprojection error per feature
+        return (new ceres::AutoDiffCostFunction<PatternViewReprojectionError, 15*4, 6, 4>( // 1,6,9
             new PatternViewReprojectionError(metric_pattern_points, image_points, width, height)));
     }
 
@@ -151,7 +152,8 @@ struct Capture {
     double optimized_error; // reprojection error after full optimization
 
     cv::Mat rvec_initial, tvec_initial; // initial pose of pattern (corresponds to initial_error)
-    cv::Mat rvec_opt, tvec_opt; // optimized pose (corresponds to optimized_error)
+    cv::Mat rvec_opt = cv::Mat::zeros(3,1,CV_64F),
+            tvec_opt = cv::Mat::zeros(3,1,CV_64F);
 
     cv::Mat img; // rgb image
 
@@ -168,15 +170,16 @@ class RunIntrinsicCalibration {
 public:
     RunIntrinsicCalibration(const std::filesystem::path& img_directory,
                             uint pattern_width = 15, uint pattern_height = 4,
-                            double square_size = 0.035, double focal_length = 1000);
+                            double square_size = 0.035);
 
     cv::Size pattern_shape;
     double square_size;
-    double initial_focal_length;
-
 // private:
 
     std::vector<cv::Point3f> metric_pattern_points; // same flat (z=0) pattern for all images
+
+
+    void visualize_projections(const Capture& cap);
 
 
     /**

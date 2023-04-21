@@ -8,34 +8,27 @@ namespace fs = std::filesystem;
 
 RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& img_directory,
                                   uint pattern_width, uint pattern_height,
-                                  double square_size,
-                                  double focal_length): 
+                                  double square_size): 
                                   pattern_shape(pattern_width, pattern_height),
-                                  square_size(square_size),
-                                  initial_focal_length(focal_length)
+                                  square_size(square_size)
 {
 
-   printf("Starting optimization for %ix%i pattern with size of %.fmm and focal length of %.1f, looking for images in %s\n",
-          pattern_width, pattern_height, square_size*1000, focal_length, img_directory.c_str());
+   printf("Starting optimization for %ix%i pattern with size of %.fmm, looking for images in %s\n",
+          pattern_width, pattern_height, square_size*1000, img_directory.c_str());
 
 
    // create debug-directory, include focal length in name
-   debug_directory = img_directory / ("debug_f"+std::to_string(int(focal_length)));
+   debug_directory = img_directory / "debug";
    fs::create_directories(debug_directory);
 
 
    metric_pattern_points = RunIntrinsicCalibration::init_flat_asymmetric_pattern(pattern_shape, square_size);
-   double initial_mean_error = collect_pattern_views(img_directory);
+   double initial_mean_error = collect_pattern_views(img_directory); // also finds good initial estimate for focal length
 
 
    std::vector<cv::Mat> all_rvecs, all_tvecs;
 
-   // double pattern_pose[6*all_image_points.size()];
-
-
-   size_t param_cnt_intrinsics = 4;
-   // size_t param_cnt_intrinsics = 9;
-   
+   size_t param_cnt_intrinsics = 4; // 9 with distortion
 
    size_t used_capture_cnt = captures.size(); // or smaller for debugging
 
@@ -43,15 +36,18 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    // init first parameters for camera intrinsics
    size_t param_block_size = param_cnt_intrinsics + 6*used_capture_cnt;
    
+   double focal_length_initial = K_initial.at<double>(0, 0);
+
+
    // focal length and principal point are scaled by image size so that all parameters are in the same range
-   double parameters[param_block_size] = {focal_length/width, focal_length/height, 0.5, 0.5}; 
+   double parameters[param_block_size] = {focal_length_initial/width, focal_length_initial/height, 0.5, 0.5}; 
    // double parameters[param_block_size] = {0.8, 1.6, 0.5, 0.5}; 
    
 
    problem.AddParameterBlock(parameters, param_cnt_intrinsics);
    
-   // setParameterBounds(parameters, 0, 0.5);   // fx with 50% tolerance
-   // setParameterBounds(parameters, 1, 0.5);   // fy 
+   // setParameterBounds(parameters, 0, 0.2);   // fx with 20% tolerance (already quite close)
+   // setParameterBounds(parameters, 1, 0.2);   // fy 
    setParameterBounds(parameters, 2, 0.45, 0.55);   // cx 
    setParameterBounds(parameters, 3, 0.45, 0.55);   // cy 
 
@@ -72,18 +68,17 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       }
       setParameterBounds(parameters + start_index, 5, 0, 1); // z always positive
 
-
-
       {
          // OPTIONAL DEBUG CHECK:
          // directly call costfunction to compare with our initial result
          // this is important to check that we use the same Rodrigues definition and projection model like OpenCV
          // to compare results and helps as a sanity check. 
-         PatternViewReprojectionError reproError(metric_pattern_points, cap.observed_points, width, height);
-         double error = 0;
-         reproError(parameters + start_index, parameters, &error);
-         if (fabs(error - cap.initial_error) > 1e-2)
-            throw std::runtime_error("Initial error does not match: " + std::to_string(error) + " vs " + std::to_string(cap.initial_error));
+   
+         //    PatternViewReprojectionError reproError(metric_pattern_points, cap.observed_points, width, height);
+         //    double error = 0;
+         //    reproError(parameters + start_index, parameters, &error);
+         //    if (fabs(error - cap.initial_error) > 1e-2)
+         //       throw std::runtime_error("Initial error does not match: " + std::to_string(error) + " vs " + std::to_string(cap.initial_error));
       }  
 
 
@@ -95,17 +90,6 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
          parameters // intrinsics at beginning of parameter array
       );
 
-
-
-
-
-      // add residual block for this image
-      // problem.AddResidualBlock(
-      //    PatternViewReprojectionError::CreateNoDistortion(metric_pattern_points, cap.observed_points, width, height),
-      //    nullptr, // squared loss
-      //    parameters + start_index,
-      //    parameters // intrinsics at beginning of parameter array
-      // );
    }
 
    cout << "Optimizing with " << used_capture_cnt << " pattern views" << endl;
@@ -116,26 +100,20 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
 
    ceres::Solver::Options options;
    options.minimizer_progress_to_stdout = true;
+   options.max_num_iterations = 500;
    // options.linear_solver_type = ceres::DENSE_SCHUR;
    options.linear_solver_type = ceres::DENSE_QR;
    
-   options.max_num_iterations = 2000;
    ceres::Solver::Summary summary;
 
    ceres::Solve(options, &problem, &summary);
 
    std::cout << summary.FullReport() << std::endl;
 
-   // cout << "fx " << parameters[0]*width << endl;
-   // cout << "fy " << parameters[1]*height << endl;
-   // cout << "cx " << parameters[2]*width << endl;
-   // cout << "cy " << parameters[3]*height << endl;
-
-
-   for (size_t i=0; i<param_block_size; ++i)
-   {
-      cout << i << "  " << parameters_copy[i] << " -> " << parameters[i] << endl;
-   }
+   // for (size_t i=0; i<param_block_size; ++i)
+   // {
+   //    cout << i << "  " << parameters_copy[i] << " -> " << parameters[i] << endl;
+   // }
    
    // recompute reprojection error to compare with result of Ceres (should prove that we use the same Rodrigues definition)
    K_optimized = cv::Mat::eye(3, 3, CV_64F);
@@ -156,9 +134,6 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       size_t start_index = param_cnt_intrinsics+i*6;
       Capture& cap = captures[i];
 
-      cap.rvec_opt = cv::Mat::zeros(3, 1, CV_64F);
-      cap.tvec_opt = cv::Mat::zeros(3, 1, CV_64F);
-
       for (int j: {0,1,2})
       {
          cap.rvec_opt.at<double>(j) = parameters[start_index+j];
@@ -166,7 +141,7 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       }
 
       double err = update_optimized_error(cap); // using K_optimized
-      cout << err << endl;
+      printf("Error changed for view %li: %.2f -> %.2f\n", i, cap.initial_error, cap.optimized_error);
 
       err_sum += err;
    }
@@ -176,15 +151,21 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    printf("Initial error was %.2f\n", initial_mean_error);
    printf("Optimized error is %.2f\n", mean_err);
    printf("improvement is %.2f%%\n", 100*(initial_mean_error-mean_err)/initial_mean_error);
+
+   for (const auto&c: captures)
+   {
+      visualize_projections(c);
+   }
+
+   // TODO: write results to file
 }
 
 
 /**
  * @brief Compute initial pose from a single pattern view and user provided focal length
  * 
- * @param image_points extracted pattern points
- * @param rvec resulting rodriques vector
- * @param tvec resulting translation vector
+ * @param cap
+ * @return double 
  */
 double RunIntrinsicCalibration::get_initial_pose(Capture& cap)
 {
@@ -200,7 +181,6 @@ double RunIntrinsicCalibration::get_initial_pose(Capture& cap)
       assert(false); // crash is better than unhandled error. We'd need to remove the Capture in this case
    }
 
-
    double z = cap.tvec_initial.at<double>(2);
    if (z<0 || z > 2)
    {
@@ -214,11 +194,11 @@ double RunIntrinsicCalibration::get_initial_pose(Capture& cap)
    // compute reprojection error:
    double error = update_initial_error(cap);
 
-   if (error > 30)
-   {
-      cerr << "initial pose error for image " << cap.filename << " is quite high: " << error << endl;
-      cerr << "consider adapting the initial focal length" << endl;
-   }
+   // if (error > 30)
+   // {
+   //    cerr << "initial pose error for image " << cap.filename << " is quite high: " << error << endl;
+   //    cerr << "consider adapting the initial focal length" << endl;
+   // }
 
    return error;
 }
@@ -293,6 +273,16 @@ double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::pat
          continue;
       }
 
+
+      // get pixel positions of circles
+      if (!extract_pattern(cap))
+      {
+         // cerr << "no pattern found in image " << cap.filename << endl;
+         continue;
+      }
+
+
+
       // check if this is the first image, in this case remember size and compare other images against it
       if (captures.empty())
       {
@@ -300,12 +290,41 @@ double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::pat
          height = cap.img.rows;
          cout << "Found first image with size: " << width << " x " << height << endl;
 
-         // initial camera matrix
          K_initial = cv::Mat::eye(3, 3, CV_64F);
-         K_initial.at<double>(0, 0) = initial_focal_length;
-         K_initial.at<double>(1, 1) = initial_focal_length;
          K_initial.at<double>(0, 2) = width/2; 
          K_initial.at<double>(1, 2) = height/2;
+
+
+         cout << "sampling values for focal length:" << endl;
+
+         // search for good initial focal length:
+         double f = 400;
+         double best_err = -1;
+         double best_f = -1;
+         // TODO: check if this is a good range
+         for (int i=0; i<20; i++) // search from 400 to 400+20*100
+         {
+            f += 100;
+            K_initial.at<double>(0, 0) = f;
+            K_initial.at<double>(1, 1) = f;
+            double err = get_initial_pose(cap);
+            printf("error for f=%.2f: %.2f\n", f, err);
+
+            if (err < best_err || best_err < 0)
+            {
+               best_err = err;
+               best_f = f;
+            }
+
+            // error has single minimum, so we can stop as soon as the error is increasing again
+            if (err > best_err)
+            {
+               K_initial.at<double>(0, 0) = best_f;
+               K_initial.at<double>(1, 1) = best_f;
+               cout << "Using f=" << best_f << " for initial pose estimation" << endl;
+               break;
+            }
+         }
       }else
       {
          if (width != cap.img.cols || height != cap.img.rows)
@@ -316,12 +335,7 @@ double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::pat
          }
       }
 
-      // get pixel positions of circles
-      if (!extract_pattern(cap))
-      {
-         // cerr << "no pattern found in image " << cap.filename << endl;
-         continue;
-      }
+
 
       // compute initial position and its error
       double err = get_initial_pose(cap);
@@ -372,12 +386,12 @@ bool RunIntrinsicCalibration::extract_pattern(Capture& cap)
          // show first two points to make order visible
          cv::circle(img_cp, cap.observed_points[0], 10, cv::Scalar(0, 0, 255), 2);
          cv::circle(img_cp, cap.observed_points[1], 10, cv::Scalar(0, 255, 0), 2);
-         debug_file_name = debug_directory/("pattern" + cap.filename+".png");
+         debug_file_name = debug_directory/("pattern__" + cap.filename+".png");
       }else
       {
          // otherwise print text to show that image was processed
          cv::putText(img_cp, "pattern not visible", cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
-         debug_file_name = debug_directory/("no_pattern" + cap.filename+".png");
+         debug_file_name = debug_directory/("no_pattern__" + cap.filename+".png");
       }
 
       cv::imwrite(debug_file_name, img_cp);
@@ -412,3 +426,19 @@ std::vector<cv::Point3f> RunIntrinsicCalibration::init_flat_asymmetric_pattern(c
    return flat_pattern_points;
 }
 
+
+void RunIntrinsicCalibration::visualize_projections(const Capture& cap)
+{
+   assert(cap.projected_initial.size() == cap.projected_opt.size());
+
+
+   cv::Mat img_cp = cap.img.clone();
+   for (size_t i = 0; i < cap.projected_initial.size(); ++i)
+   {
+      cv::circle(img_cp, cap.projected_initial[i], 2, cv::Scalar(0, 0, 255), 2);
+      cv::circle(img_cp, cap.projected_opt[i], 2, cv::Scalar(0, 255, 0), 2);
+      // cv::line(img_cp, cap.projected_initial[i], cap.projected_opt[i], cv::Scalar(255, 0, 0), 2);
+   }
+   string filename = debug_directory/("projections__" + cap.filename+".png");
+   cv::imwrite(filename, img_cp);
+}

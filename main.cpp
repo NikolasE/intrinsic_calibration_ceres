@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
   // 800: 27.16
   // 1000: 6.34
 
-  RunIntrinsicCalibration calib = RunIntrinsicCalibration(p, 4, 15, 0.035, 1200);
+  RunIntrinsicCalibration calib = RunIntrinsicCalibration(p, 4, 15, 0.035);
 
   return 0;
 }
