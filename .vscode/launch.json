@@ -9,6 +9,8 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/run_calib",
+            // "program": "${workspaceFolder}/build/capture_images",
+
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

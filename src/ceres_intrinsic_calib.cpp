@@ -141,7 +141,7 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       }
 
       double err = update_optimized_error(cap); // using K_optimized
-      printf("Error changed for view %li: %.2f -> %.2f\n", i, cap.initial_error, cap.optimized_error);
+      printf("Error changed for view %s: %.2f -> %.2f\n", cap.filename.c_str(), cap.initial_error, cap.optimized_error);
 
       err_sum += err;
    }
@@ -190,17 +190,7 @@ double RunIntrinsicCalibration::get_initial_pose(Capture& cap)
       exit(23);
    }
 
-
-   // compute reprojection error:
-   double error = update_initial_error(cap);
-
-   // if (error > 30)
-   // {
-   //    cerr << "initial pose error for image " << cap.filename << " is quite high: " << error << endl;
-   //    cerr << "consider adapting the initial focal length" << endl;
-   // }
-
-   return error;
+   return update_initial_error(cap);
 }
 
 double RunIntrinsicCalibration::update_initial_error(Capture& cap)
@@ -280,8 +270,6 @@ double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::pat
          // cerr << "no pattern found in image " << cap.filename << endl;
          continue;
       }
-
-
 
       // check if this is the first image, in this case remember size and compare other images against it
       if (captures.empty())
@@ -365,14 +353,17 @@ double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::pat
 
    printf("mean error: %.2f, max error: %.2f\n", mean_error, max_error);
 
+   std::sort(captures.begin(), captures.end(), [](const Capture& a, const Capture& b) { return a.filename < b.filename; });
+
+
    if (num_images_in_dir){ *num_images_in_dir = img_cnt;}
    return mean_error;
 }
 
 
-
 bool RunIntrinsicCalibration::extract_pattern(Capture& cap) 
 {
+   // TODO: BlobDetectorParams, Thresholding preporcessing etc.
    cap.pattern_visible = cv::findCirclesGrid(cap.img, pattern_shape, cap.observed_points, cv::CALIB_CB_ASYMMETRIC_GRID);
 
    { // create debug image
