@@ -44,8 +44,8 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    size_t param_block_size = param_cnt_intrinsics + 6*used_capture_cnt;
    
    // focal length and principal point are scaled by image size so that all parameters are in the same range
-   // double parameters[param_block_size] = {focal_length/width, focal_length/height, 0.5, 0.5}; 
-   double parameters[param_block_size] = {0.8, 1.6, 0.5, 0.5}; 
+   double parameters[param_block_size] = {focal_length/width, focal_length/height, 0.5, 0.5}; 
+   // double parameters[param_block_size] = {0.8, 1.6, 0.5, 0.5}; 
    
 
    problem.AddParameterBlock(parameters, param_cnt_intrinsics);
@@ -72,13 +72,40 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       }
       setParameterBounds(parameters + start_index, 5, 0, 1); // z always positive
 
-      // add residual block for this image
+
+
+      {
+         // OPTIONAL DEBUG CHECK:
+         // directly call costfunction to compare with our initial result
+         // this is important to check that we use the same Rodrigues definition and projection model like OpenCV
+         // to compare results and helps as a sanity check. 
+         PatternViewReprojectionError reproError(metric_pattern_points, cap.observed_points, width, height);
+         double error = 0;
+         reproError(parameters + start_index, parameters, &error);
+         if (fabs(error - cap.initial_error) > 1e-2)
+            throw std::runtime_error("Initial error does not match: " + std::to_string(error) + " vs " + std::to_string(cap.initial_error));
+      }  
+
+
+      // now add residual block
       problem.AddResidualBlock(
          PatternViewReprojectionError::CreateNoDistortion(metric_pattern_points, cap.observed_points, width, height),
          nullptr, // squared loss
          parameters + start_index,
          parameters // intrinsics at beginning of parameter array
       );
+
+
+
+
+
+      // add residual block for this image
+      // problem.AddResidualBlock(
+      //    PatternViewReprojectionError::CreateNoDistortion(metric_pattern_points, cap.observed_points, width, height),
+      //    nullptr, // squared loss
+      //    parameters + start_index,
+      //    parameters // intrinsics at beginning of parameter array
+      // );
    }
 
    cout << "Optimizing with " << used_capture_cnt << " pattern views" << endl;
@@ -140,7 +167,6 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
 
       double err = update_optimized_error(cap); // using K_optimized
       cout << err << endl;
-
 
       err_sum += err;
    }

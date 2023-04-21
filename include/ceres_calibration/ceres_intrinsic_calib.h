@@ -33,7 +33,7 @@ struct PatternViewReprojectionError {
     template <typename T>
     bool operator()(const T* pattern_pose, // brings pattern points to camera frame
                     const T* camera_intrinsics, // fx, fy, cx, cy, [k1, k2, p1, p2, k3]
-                    T* mean_squared_error) const 
+                    T* error) const 
     {
 
         // std::cout << "operator called" << std::endl;
@@ -60,9 +60,8 @@ struct PatternViewReprojectionError {
         // std::cout << "in_cam_frame: " << pattern_pose[0] << " " << pattern_pose[1] << " " << pattern_pose[2] << std::endl;
         // std::cout << "trans " << pattern_pose[3] << " " << pattern_pose[4] << " " << pattern_pose[5] << std::endl;
 
-
-        T err_sum_x = 0;
-        T err_sum_y = 0;
+        // T sum_x = T(0);
+        // T sum_y = T(0);
 
 
         for (int i = 0; i < metric_pattern_points.size(); ++i) {
@@ -103,15 +102,13 @@ struct PatternViewReprojectionError {
             // compute squared error
             T x_diff = u - T(measured_image_points[i].x);
             T y_diff = v - T(measured_image_points[i].y);
-            T sq_error = x_diff * x_diff + y_diff * y_diff;
 
+            T sq_error = x_diff * x_diff + y_diff * y_diff;
             sum_of_squares += sq_error;
         }
 
-
-        // RMSE
-        *mean_squared_error = sqrt(sum_of_squares / T(metric_pattern_points.size()));
-
+        // error computes as in RunIntrinsicCalibration::get_error
+        *error = sum_of_squares / T(metric_pattern_points.size());
 
         // std::cout << "root mean_squared_error: " << *mean_squared_error << std::endl;
         return true;
@@ -122,7 +119,7 @@ struct PatternViewReprojectionError {
         // 3+3 = 6 pose parameters (rvec, tvec)
         // 9 intrinsic parameters (fx, fy, cx, cy, k1, k2, p1, p2, k3)
         // 1 mean reprojection error
-        return (new ceres::AutoDiffCostFunction<PatternViewReprojectionError, 2, 6, 4>( // 1,6,9
+        return (new ceres::AutoDiffCostFunction<PatternViewReprojectionError, 1, 6, 4>( // 1,6,9
             new PatternViewReprojectionError(metric_pattern_points, image_points, width, height)));
     }
 
