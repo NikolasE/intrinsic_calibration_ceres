@@ -157,10 +157,8 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       visualize_projections(c);
    }
 
-   cout << "Running OpenCV Calibration for comparison" << endl;
-   opencv_calibrate_camera();
-
-
+   // cout << "Running OpenCV Calibration for comparison" << endl;
+   // opencv_calibrate_camera();
    // TODO: write results to file
 }
 
@@ -469,9 +467,9 @@ void RunIntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
 
    double rms = cv::calibrateCamera(object_points, image_points, image_size, K, dist, rvecs, tvecs, flags);
 
-   cout << "RMS error reported by cv::calibrateCamera: " << rms << endl;
+   // convert to our error definition
+   cout << "RMS error reported by cv::calibrateCamera: " << pow(rms,2) << endl;
    cout << "Optimized K matrix: " << endl << K << endl;
-
 
    // copy results to captures
    // for (size_t i = 0; i < captures.size(); ++i)
@@ -479,8 +477,11 @@ void RunIntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
    //    captures[i].rvec_opt = rvecs[i];
    //    captures[i].tvec_opt = tvecs[i];
    // }
+   // K_optimized = K.clone();
 
+   // double err_sum = 0;
+   // for (auto& cap : captures){ err_sum += update_optimized_error(cap);}
+   // double err = err_sum / captures.size();
 
-
-   // TODO: copy rvec, tvec to capture, redo evaluation
+   // cout << "Reprojection error for OpenCV Solution " << err << endl; // same as rms**2
 }
