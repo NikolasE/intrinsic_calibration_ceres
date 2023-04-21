@@ -61,6 +61,10 @@ struct PatternViewReprojectionError {
         // std::cout << "trans " << pattern_pose[3] << " " << pattern_pose[4] << " " << pattern_pose[5] << std::endl;
 
 
+        T err_sum_x = 0;
+        T err_sum_y = 0;
+
+
         for (int i = 0; i < metric_pattern_points.size(); ++i) {
 
             const auto& p = metric_pattern_points[i];
@@ -109,7 +113,7 @@ struct PatternViewReprojectionError {
         *mean_squared_error = sqrt(sum_of_squares / T(metric_pattern_points.size()));
 
 
-        std::cout << "root mean_squared_error: " << *mean_squared_error << std::endl;
+        // std::cout << "root mean_squared_error: " << *mean_squared_error << std::endl;
         return true;
     }
 
@@ -118,7 +122,7 @@ struct PatternViewReprojectionError {
         // 3+3 = 6 pose parameters (rvec, tvec)
         // 9 intrinsic parameters (fx, fy, cx, cy, k1, k2, p1, p2, k3)
         // 1 mean reprojection error
-        return (new ceres::AutoDiffCostFunction<PatternViewReprojectionError, 1, 6, 4>( // 1,6,9
+        return (new ceres::AutoDiffCostFunction<PatternViewReprojectionError, 2, 6, 4>( // 1,6,9
             new PatternViewReprojectionError(metric_pattern_points, image_points, width, height)));
     }
 

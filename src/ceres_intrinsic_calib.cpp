@@ -44,60 +44,54 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    size_t param_block_size = param_cnt_intrinsics + 6*used_capture_cnt;
    
    // focal length and principal point are scaled by image size so that all parameters are in the same range
-   double parameters[param_block_size] = {focal_length/width, focal_length/height, 0.5, 0.5}; 
+   // double parameters[param_block_size] = {focal_length/width, focal_length/height, 0.5, 0.5}; 
+   double parameters[param_block_size] = {0.8, 1.6, 0.5, 0.5}; 
+   
 
+   problem.AddParameterBlock(parameters, param_cnt_intrinsics);
+   
+   // setParameterBounds(parameters, 0, 0.5);   // fx with 50% tolerance
+   // setParameterBounds(parameters, 1, 0.5);   // fy 
+   setParameterBounds(parameters, 2, 0.45, 0.55);   // cx 
+   setParameterBounds(parameters, 3, 0.45, 0.55);   // cy 
 
    // use initial pose as initial guess for optimization
    for (size_t i=0; i<used_capture_cnt; i++)
    {
       const Capture& cap = captures[i];
       size_t start_index = param_cnt_intrinsics+i*6; 
+      problem.AddParameterBlock(parameters + start_index, 6);
 
       for (int i: {0,1,2})
       {
          parameters[start_index+i] = cap.rvec_initial.at<double>(i);
          parameters[start_index+i+3] = cap.tvec_initial.at<double>(i);
+
+         setParameterBounds(parameters + start_index, i, -M_PI, M_PI); // if required, set after AddResidualBlock!
+         setParameterBounds(parameters + start_index, i+3, -1, 1);
       }
-   }
+      setParameterBounds(parameters + start_index, 5, 0, 1); // z always positive
 
-   // add one residual block per pattern view
-   for (size_t i=0; i<used_capture_cnt; i++)
-   {
-      const Capture& cap = captures[i];
-      size_t start_index = param_cnt_intrinsics+i*6;
-
+      // add residual block for this image
       problem.AddResidualBlock(
          PatternViewReprojectionError::CreateNoDistortion(metric_pattern_points, cap.observed_points, width, height),
          nullptr, // squared loss
          parameters + start_index,
          parameters // intrinsics at beginning of parameter array
       );
-
-      for (int i: {0,1,2})
-      {
-         setParameterBounds(parameters, start_index+i, -M_PI, M_PI); // if required, set after AddResidualBlock!
-         setParameterBounds(parameters, start_index+i+3, -1, 1);
-      }
-      setParameterBounds(parameters, start_index+5, 0, 1); // z always positive
-
    }
-
-   setParameterBounds(parameters, 0, 0.3);   // fx with 30% tolerance
-   setParameterBounds(parameters, 1, 0.3);   // fy 
-   setParameterBounds(parameters, 2, 0.45, 0.55);   // cx 
-   setParameterBounds(parameters, 3, 0.45, 0.55);   // cy 
-
 
    cout << "Optimizing with " << used_capture_cnt << " pattern views" << endl;
 
    // copy parameters-array to compare later
    double parameters_copy[param_block_size];
-   memccpy(parameters_copy, parameters, param_block_size, sizeof(double));
-
+   memcpy(parameters_copy, parameters, sizeof(parameters));
 
    ceres::Solver::Options options;
    options.minimizer_progress_to_stdout = true;
-   options.linear_solver_type = ceres::DENSE_SCHUR;
+   // options.linear_solver_type = ceres::DENSE_SCHUR;
+   options.linear_solver_type = ceres::DENSE_QR;
+   
    options.max_num_iterations = 2000;
    ceres::Solver::Summary summary;
 
@@ -105,61 +99,57 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
 
    std::cout << summary.FullReport() << std::endl;
 
-   cout << "fx " << parameters[0]*width << endl;
-   cout << "fy " << parameters[1]*height << endl;
-   cout << "cx " << parameters[2]*width << endl;
-   cout << "cy " << parameters[3]*height << endl;
+   // cout << "fx " << parameters[0]*width << endl;
+   // cout << "fy " << parameters[1]*height << endl;
+   // cout << "cx " << parameters[2]*width << endl;
+   // cout << "cy " << parameters[3]*height << endl;
 
 
-   // for (size_t i=0; i<param_block_size; ++i)
-   // {
-   //    cout << i << "  " << parameters_copy[i] << " -> " << parameters[i] << endl;
-   // }
+   for (size_t i=0; i<param_block_size; ++i)
+   {
+      cout << i << "  " << parameters_copy[i] << " -> " << parameters[i] << endl;
+   }
    
    // recompute reprojection error to compare with result of Ceres (should prove that we use the same Rodrigues definition)
-   cv::Mat camera_matrix = cv::Mat::eye(3, 3, CV_64F);
-   camera_matrix.at<double>(0, 0) = parameters[0]*width;
-   camera_matrix.at<double>(1, 1) = parameters[1]*height;
-   camera_matrix.at<double>(0, 2) = parameters[2]*width;
-   camera_matrix.at<double>(1, 2) = parameters[3]*height;
+   K_optimized = cv::Mat::eye(3, 3, CV_64F);
+   K_optimized.at<double>(0, 0) = parameters[0]*width;
+   K_optimized.at<double>(1, 1) = parameters[1]*height;
+   K_optimized.at<double>(0, 2) = parameters[2]*width;
+   K_optimized.at<double>(1, 2) = parameters[3]*height;
+
+   // in future:
+   // dist_coeffs_optimized = parameters[....]
+
+   cout << "new camera matrix " << endl << K_optimized << endl;
+
+   double err_sum = 0;
+
+   for (size_t i=0; i<used_capture_cnt; ++i)
+   {
+      size_t start_index = param_cnt_intrinsics+i*6;
+      Capture& cap = captures[i];
+
+      cap.rvec_opt = cv::Mat::zeros(3, 1, CV_64F);
+      cap.tvec_opt = cv::Mat::zeros(3, 1, CV_64F);
+
+      for (int j: {0,1,2})
+      {
+         cap.rvec_opt.at<double>(j) = parameters[start_index+j];
+         cap.tvec_opt.at<double>(j) = parameters[start_index+j+3];
+      }
+
+      double err = update_optimized_error(cap); // using K_optimized
+      cout << err << endl;
 
 
-   // double total_err = 0;
+      err_sum += err;
+   }
 
-   // for (size_t i=0; i<used_capture_cnt; ++i)
-   // {
-   //    size_t start_index = param_cnt_intrinsics+i*6;
+   double mean_err = err_sum/used_capture_cnt;
 
-   //    cv::Mat rvec = cv::Mat(1,3, CV_64F);
-   //    rvec.at<double>(0) = parameters[start_index + 0];
-   //    rvec.at<double>(1) = parameters[start_index + 1];
-   //    rvec.at<double>(2) = parameters[start_index + 2];
-      
-   //    cv::Mat tvec = cv::Mat(1,3, CV_64F);
-   //    tvec.at<double>(0) = parameters[start_index + 3];
-   //    tvec.at<double>(1) = parameters[start_index + 4];
-   //    tvec.at<double>(2) = parameters[start_index + 5];
-      
-   //    std::vector<cv::Point2f> projected_points;
-   //    cv::projectPoints(metric_pattern_points, rvec, tvec, camera_matrix, cv::Mat(), projected_points);
-
-   //    double err_sum = 0;
-   //    for (auto tup: boost::combine(projected_points, all_image_points[i]))
-   //    {
-   //       cv::Point2f reprojected, measured;
-   //       boost::tie(reprojected, measured) = tup;
-   //       double err = pow(cv::norm(reprojected - measured),2);
-   //       err_sum += err;
-   //    }
-
-   //    double mean_error = sqrt(err_sum / projected_points.size());
-   //    cout << "mean error " << i << "  : " << mean_error << endl;
-
-   //    total_err += mean_error;
-   // }
-
-
-   // cout << "total error after ceres " << total_err/used_capture_cnt << endl;
+   printf("Initial error was %.2f\n", initial_mean_error);
+   printf("Optimized error is %.2f\n", mean_err);
+   printf("improvement is %.2f%%\n", 100*(initial_mean_error-mean_err)/initial_mean_error);
 }
 
 
