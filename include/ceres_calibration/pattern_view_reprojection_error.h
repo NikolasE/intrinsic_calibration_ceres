@@ -1,12 +1,12 @@
 #ifndef CERES_CALIBRATION_PATTERN_VIEW_REPROJECTION_ERROR_H
 #define CERES_CALIBRATION_PATTERN_VIEW_REPROJECTION_ERROR_H
 
-
 #include <vector>
+
 #include <opencv2/opencv.hpp>
+
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
-
 
 /**
  * @brief The PatternViewReprojectionError struct can be used in a ceres::CostFunction

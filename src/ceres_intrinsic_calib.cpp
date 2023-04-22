@@ -10,9 +10,6 @@ IntrinsicCalibration::IntrinsicCalibration(const std::filesystem::path& output_d
                                   output_dir(output_directory)
 {
    fs::create_directories(output_directory);
-
-   // RunIntrinsicCalibration::init_flat_asymmetric_pattern(pattern_shape, square_size);
-   // collect_pattern_views(img_directory); // also finds good initial estimate for focal length
 }
 
 
@@ -171,20 +168,40 @@ bool IntrinsicCalibration::run_optimization(bool optimize_distortion)
       err_sum += err;
    }
 
-   double mean_err = err_sum/used_capture_cnt;
+   optimized_mean_error = err_sum/used_capture_cnt;
 
    printf("Initial error was %.2f\n", initial_mean_error);
-   printf("Optimized error is %.2f\n", mean_err);
-   printf("improvement is %.2f%%\n", 100*(initial_mean_error-mean_err)/initial_mean_error);
+   printf("Optimized error is %.2f\n", optimized_mean_error);
+   printf("improvement is %.2f%%\n", 100*(initial_mean_error-optimized_mean_error)/initial_mean_error);
 
    for (const auto&c: captures)
    {
       visualize_projections(c);
    }
 
-   cout << "Running OpenCV Calibration for comparison" << endl;
-   opencv_calibrate_camera(optimize_distortion);
-   // TODO: write results to file
+   // write result to file:
+   fs::path results_filename = output_dir/"calibration_result.yml";
+
+   cv::FileStorage fs(results_filename, cv::FileStorage::WRITE);
+   if (!fs.isOpened())
+   {
+      cout << "Could not open file " << results_filename << " for writing" << endl;
+      return false;
+   }
+
+   fs << "with_distortion" << optimize_distortion;
+   fs << "observation_cnt" << used_capture_cnt;
+   if (optimize_distortion)
+   {
+      fs << "distortion_coeffs" << dist_coeffs_optimized;
+   }
+
+   fs << "initial_error" << initial_mean_error;
+   fs << "optimized_error" << optimized_mean_error;
+   fs << "K" << K_optimized;
+
+   cout << "Wrote calibration results to " << results_filename << endl;
+
 
    return true;
 }
@@ -422,7 +439,7 @@ bool OpenCVAsymmetricCircleGridCalibration::visualize_detection(const Capture& c
 
 bool OpenCVAsymmetricCircleGridCalibration::extract_pattern(Capture& cap) 
 {
-   // TODO: BlobDetectorParams, Thresholding preporcessing etc.
+   // TODO: BlobDetectorParams, Thresholding preprocessing etc.
    cap.pattern_visible = cv::findCirclesGrid(cap.img, pattern_shape, cap.observed_points, cv::CALIB_CB_ASYMMETRIC_GRID);
 
    visualize_detection(cap);
@@ -436,9 +453,8 @@ void OpenCVAsymmetricCircleGridCalibration::initialize_metric_pattern(cv::Size s
    cout << "Searching for OpenCV Asymmetric Circle Grid calibration pattern with shape " << shape << " and square size " << square_size_m*1000 << "mm" << endl;
    if (square_size_m > 0.2)
    {
-      cout << "WARNING: square size is larger than 20cm, are you sure?" << endl;
+      cerr << "WARNING: square size is larger than 20cm, are you sure?" << endl;
    }
-
 
    pattern_shape = shape;
    square_size_m = square_size_m;
@@ -464,23 +480,21 @@ void OpenCVAsymmetricCircleGridCalibration::initialize_metric_pattern(cv::Size s
 }
 
 
-void IntrinsicCalibration::visualize_projections(const Capture& cap)
+bool IntrinsicCalibration::visualize_projections(const Capture& cap)
 {
    assert(cap.projected_initial.size() == cap.projected_opt.size());
-
 
    cv::Mat img_cp = cap.img.clone();
    for (size_t i = 0; i < cap.projected_initial.size(); ++i)
    {
       cv::circle(img_cp, cap.projected_initial[i], 2, cv::Scalar(0, 0, 255), 2);
       cv::circle(img_cp, cap.projected_opt[i], 2, cv::Scalar(0, 255, 0), 2);
-      // cv::line(img_cp, cap.projected_initial[i], cap.projected_opt[i], cv::Scalar(255, 0, 0), 2);
    }
    string filename = output_dir/("projections__" + cap.filename+".png");
-   cv::imwrite(filename, img_cp);
+   return cv::imwrite(filename, img_cp);
 }
 
-void IntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
+double IntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
 {
    vector<vector<cv::Point3f>> object_points;
    vector<vector<cv::Point2f>> image_points;
@@ -518,6 +532,8 @@ void IntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
    {
       cout << "Optimized distortion coefficients: " << endl << dist << endl;
    }
+
+   return rms;
 
    // copy results to captures
    // for (size_t i = 0; i < captures.size(); ++i)

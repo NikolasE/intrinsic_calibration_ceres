@@ -27,10 +27,19 @@ int main(int argc, char** argv) {
 
   std::filesystem::path output_dir = p / "output";
 
+  bool with_distortion = true;
+
   OpenCVAsymmetricCircleGridCalibration calib(output_dir);
   calib.initialize_metric_pattern(cv::Size(4, 15), 0.035);
   calib.collect_pattern_views(p);
-  calib.run_optimization(true);
+  calib.run_optimization(with_distortion);
+
+
+
+
+  // cout << "Running OpenCV Calibration for comparison" << endl;
+  // opencv_calibrate_camera(optimize_distortion);
+
 
 
   return 0;
