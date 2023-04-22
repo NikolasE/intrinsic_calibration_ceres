@@ -28,7 +28,7 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
 
    std::vector<cv::Mat> all_rvecs, all_tvecs;
 
-   size_t param_cnt_intrinsics = 4; // 9 with distortion
+   size_t param_cnt_intrinsics = 9; // 4 or 4+dist_coeffs_optimized.width with distortion
 
    size_t used_capture_cnt = captures.size(); // or smaller for debugging
 
@@ -40,9 +40,10 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
 
 
    // focal length and principal point are scaled by image size so that all parameters are in the same range
-   double parameters[param_block_size] = {focal_length_initial/width, focal_length_initial/height, 0.5, 0.5}; 
-   // double parameters[param_block_size] = {0.8, 1.6, 0.5, 0.5}; 
-   
+   // double parameters[param_block_size] = {focal_length_initial/width, focal_length_initial/height, 0.5, 0.5}; 
+
+   // with fice distortion parameters
+   double parameters[param_block_size] = {focal_length_initial/width, focal_length_initial/height, 0.5, 0.5, 0., 0. ,0. ,0. ,0.}; 
 
    problem.AddParameterBlock(parameters, param_cnt_intrinsics);
    
@@ -122,10 +123,14 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    K_optimized.at<double>(0, 2) = parameters[2]*width;
    K_optimized.at<double>(1, 2) = parameters[3]*height;
 
-   // in future:
-   // dist_coeffs_optimized = parameters[....]
+   dist_coeffs_optimized = cv::Mat::zeros(1, 5, CV_64F);
+   for (uint i=4; i<param_cnt_intrinsics; ++i)
+   {
+      dist_coeffs_optimized.at<double>(i-4) = parameters[i];
+   }
 
    cout << "new camera matrix " << endl << K_optimized << endl;
+   cout << "new distortion coeffs " << endl << dist_coeffs_optimized << endl;
 
    double err_sum = 0;
 
@@ -158,7 +163,8 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    }
 
    // cout << "Running OpenCV Calibration for comparison" << endl;
-   // opencv_calibrate_camera();
+   bool optimize_distortion = true;
+   opencv_calibrate_camera(optimize_distortion);
    // TODO: write results to file
 }
 
@@ -470,6 +476,11 @@ void RunIntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
    // convert to our error definition
    cout << "RMS error reported by cv::calibrateCamera: " << pow(rms,2) << endl;
    cout << "Optimized K matrix: " << endl << K << endl;
+
+   if (optimize_distortion)
+   {
+      cout << "Optimized distortion coefficients: " << endl << dist << endl;
+   }
 
    // copy results to captures
    // for (size_t i = 0; i < captures.size(); ++i)

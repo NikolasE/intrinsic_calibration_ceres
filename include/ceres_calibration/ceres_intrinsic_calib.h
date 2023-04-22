@@ -37,7 +37,7 @@ struct PatternViewReprojectionError {
     {
 
         // std::cout << "operator called" << std::endl;
-        T sum_of_squares = T(0);
+        // T sum_of_squares = T(0);
 
         // use normalized camera intrinsics to have all parameters around +- 1
         const T& fx = camera_intrinsics[0]*T(width);
@@ -45,11 +45,11 @@ struct PatternViewReprojectionError {
         const T& cx = camera_intrinsics[2]*T(width);
         const T& cy = camera_intrinsics[3]*T(height);
 
-        // const T& k1 = camera_intrinsics[4];
-        // const T& k2 = camera_intrinsics[5];
-        // const T& p1 = camera_intrinsics[6];
-        // const T& p2 = camera_intrinsics[7];
-        // const T& k3 = camera_intrinsics[8];
+        const T& k1 = camera_intrinsics[4];
+        const T& k2 = camera_intrinsics[5];
+        const T& p1 = camera_intrinsics[6];
+        const T& p2 = camera_intrinsics[7];
+        const T& k3 = camera_intrinsics[8];
 
         for (int i = 0; i < metric_pattern_points.size(); ++i) {
 
@@ -65,20 +65,20 @@ struct PatternViewReprojectionError {
             T x = in_cam_frame[0] / in_cam_frame[2];
             T y = in_cam_frame[1] / in_cam_frame[2];
 
-            // T r2 = x*x + y*y;
-            // T r4 = r2*r2;
-            // T r6 = r4*r2;
-            // T radial_distortion = 1.0 + k1*r2 + k2*r4 + k3*r6;
-            // T x_distorted = x * radial_distortion + 2.0*p1*x*y + p2*(r2 + 2.0*x*x);
-            // T y_distorted = y * radial_distortion + 2.0*p2*x*y + p1*(r2 + 2.0*y*y);
+            T r2 = x*x + y*y;
+            T r4 = r2*r2;
+            T r6 = r4*r2;
+            T radial_distortion = 1.0 + k1*r2 + k2*r4 + k3*r6;
+            T x_distorted = x * radial_distortion + 2.0*p1*x*y + p2*(r2 + 2.0*x*x);
+            T y_distorted = y * radial_distortion + 2.0*p2*x*y + p1*(r2 + 2.0*y*y);
 
-            // T u = fx * x_distorted + cx;
-            // T v = fy * y_distorted + cy;
+            T u = fx * x_distorted + cx;
+            T v = fy * y_distorted + cy;
 
 
             // optimization without distortion
-            T u = fx * x + cx;
-            T v = fy * y + cy;
+            // T u = fx * x + cx;
+            // T v = fy * y + cy;
 
             // compute squared error
             T x_diff = u - T(measured_image_points[i].x);
@@ -101,7 +101,7 @@ struct PatternViewReprojectionError {
         // 3+3 = 6 pose parameters (rvec, tvec)
         // 9 intrinsic parameters (fx, fy, cx, cy, k1, k2, p1, p2, k3)
         // 15*4: reprojection error per feature
-        return (new ceres::AutoDiffCostFunction<PatternViewReprojectionError, 15*4, 6, 4>( // 1,6,9
+        return (new ceres::AutoDiffCostFunction<PatternViewReprojectionError, 15*4, 6, 9>( 
             new PatternViewReprojectionError(metric_pattern_points, image_points, width, height)));
     }
 
@@ -214,7 +214,7 @@ public:
 
     cv::Mat K_initial; // initial guess for intrinsic parameters
     cv::Mat K_optimized; // optimized intrinsic parameters
-    cv::Mat dist_coeffs_optimized; // optimized distortion coefficients (we currently have no initial guess for these)
+    cv::Mat dist_coeffs_optimized = cv::Mat::zeros(1, 5, CV_64F); // optimized distortion coefficients (we currently have no initial guess for these)
 };
 
 
