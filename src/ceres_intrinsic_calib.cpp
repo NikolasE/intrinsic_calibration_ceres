@@ -6,44 +6,58 @@ using namespace std;
 namespace fs = std::filesystem;
 #include <boost/range/combine.hpp>
 
-RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& img_directory,
-                                  uint pattern_width, uint pattern_height,
-                                  double square_size): 
-                                  pattern_shape(pattern_width, pattern_height),
-                                  square_size(square_size)
+IntrinsicCalibration::IntrinsicCalibration(const std::filesystem::path& output_directory): 
+                                  output_dir(output_directory)
 {
+   fs::create_directories(output_directory);
 
-   printf("Starting optimization for %ix%i pattern with size of %.fmm, looking for images in %s\n",
-          pattern_width, pattern_height, square_size*1000, img_directory.c_str());
-
-
-   // create debug-directory, include focal length in name
-   debug_directory = img_directory / "debug";
-   fs::create_directories(debug_directory);
+   // RunIntrinsicCalibration::init_flat_asymmetric_pattern(pattern_shape, square_size);
+   // collect_pattern_views(img_directory); // also finds good initial estimate for focal length
+}
 
 
-   metric_pattern_points = RunIntrinsicCalibration::init_flat_asymmetric_pattern(pattern_shape, square_size);
-   double initial_mean_error = collect_pattern_views(img_directory); // also finds good initial estimate for focal length
+bool IntrinsicCalibration::run_optimization(bool optimize_distortion)
+{
+   if (captures.empty())
+   {
+      cerr << "No captures found! (was collect_pattern_views called?)" << endl;
+      return false;
+   }
 
+   cout << "Starting optimization " << (optimize_distortion ? "with" : "without") << " distortion" << endl;
+   
 
-   std::vector<cv::Mat> all_rvecs, all_tvecs;
+   size_t param_cnt_distortion = 5; // k1, k2, p1, p2, k3
 
-   size_t param_cnt_intrinsics = 9; // 4 or 4+dist_coeffs_optimized.width with distortion
+   // at least fx, fy, cx, cy, optionally k1, k2, p1, p2, k3
+   size_t param_cnt_intrinsics = 4 + (optimize_distortion ? param_cnt_distortion : 0);  
+
+   size_t param_cnt_pose = 6; // 6 for rvec and tvec 
 
    size_t used_capture_cnt = captures.size(); // or smaller for debugging
 
-
-   // init first parameters for camera intrinsics
-   size_t param_block_size = param_cnt_intrinsics + 6*used_capture_cnt;
+   
    
    double focal_length_initial = K_initial.at<double>(0, 0);
+   if (focal_length_initial == 0)
+   {
+      cerr << "Focal length is 0, please set initial guess for K matrix" << endl;
+      return false;
+   }
 
+   size_t param_block_size = param_cnt_intrinsics + param_cnt_pose*used_capture_cnt;
 
    // focal length and principal point are scaled by image size so that all parameters are in the same range
-   // double parameters[param_block_size] = {focal_length_initial/width, focal_length_initial/height, 0.5, 0.5}; 
-
-   // with fice distortion parameters
-   double parameters[param_block_size] = {focal_length_initial/width, focal_length_initial/height, 0.5, 0.5, 0., 0. ,0. ,0. ,0.}; 
+   double parameters[param_block_size] = {focal_length_initial/width, focal_length_initial/height, 0.5, 0.5};
+   
+   if (optimize_distortion)
+   {
+      for (int i=0; i<param_cnt_distortion; i++)
+      {
+         parameters[param_cnt_intrinsics+i] = 0.0; // initial guess for distortion parameters (k1, k2, p1, p2, k3
+      }
+   }
+   
 
    problem.AddParameterBlock(parameters, param_cnt_intrinsics);
    
@@ -56,8 +70,8 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    for (size_t i=0; i<used_capture_cnt; i++)
    {
       const Capture& cap = captures[i];
-      size_t start_index = param_cnt_intrinsics+i*6; 
-      problem.AddParameterBlock(parameters + start_index, 6);
+      size_t start_index = param_cnt_intrinsics+i*param_cnt_pose; 
+      problem.AddParameterBlock(parameters + start_index, param_cnt_pose);
 
       for (int i: {0,1,2})
       {
@@ -83,9 +97,11 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       }  
 
 
-      // now add residual block
+      // if (optimize_distortion), 9 parameters are used for intrinsics, otherwise 4. 
+      // This breaks a bit the abstraction of the cost function, but the Reprojection is currently only implemented for 4 or 9 parameters
+      // TODO: check DynamicAutoDiffCostFunction if many more distortion parameters are added
       problem.AddResidualBlock(
-         PatternViewReprojectionError::CreateNoDistortion(metric_pattern_points, cap.observed_points, width, height),
+         PatternViewReprojectionError::Create(metric_pattern_points, cap.observed_points, width, height, optimize_distortion),
          nullptr, // squared loss
          parameters + start_index,
          parameters // intrinsics at beginning of parameter array
@@ -123,17 +139,21 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
    K_optimized.at<double>(0, 2) = parameters[2]*width;
    K_optimized.at<double>(1, 2) = parameters[3]*height;
 
-   dist_coeffs_optimized = cv::Mat::zeros(1, 5, CV_64F);
-   for (uint i=4; i<param_cnt_intrinsics; ++i)
+   
+   cout << "optimzied camera matrix " << endl << K_optimized << endl;
+   
+   if (optimize_distortion)
    {
-      dist_coeffs_optimized.at<double>(i-4) = parameters[i];
+      dist_coeffs_optimized = cv::Mat::zeros(1, 5, CV_64F);
+      for (uint i=4; i<param_cnt_intrinsics; ++i) // skip fx, fy, cx, cy
+      {
+         dist_coeffs_optimized.at<double>(i-4) = parameters[i];
+      }
+      cout << "optimized distortion coeffs " << endl << dist_coeffs_optimized << endl;
    }
 
-   cout << "new camera matrix " << endl << K_optimized << endl;
-   cout << "new distortion coeffs " << endl << dist_coeffs_optimized << endl;
 
    double err_sum = 0;
-
    for (size_t i=0; i<used_capture_cnt; ++i)
    {
       size_t start_index = param_cnt_intrinsics+i*6;
@@ -146,7 +166,7 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       }
 
       double err = update_optimized_error(cap); // using K_optimized
-      printf("Error changed for view %s: %.2f -> %.2f\n", cap.filename.c_str(), cap.initial_error, cap.optimized_error);
+      // printf("Error changed for view %s: %.2f -> %.2f\n", cap.filename.c_str(), cap.initial_error, cap.optimized_error);
 
       err_sum += err;
    }
@@ -162,10 +182,11 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
       visualize_projections(c);
    }
 
-   // cout << "Running OpenCV Calibration for comparison" << endl;
-   bool optimize_distortion = true;
+   cout << "Running OpenCV Calibration for comparison" << endl;
    opencv_calibrate_camera(optimize_distortion);
    // TODO: write results to file
+
+   return true;
 }
 
 
@@ -175,7 +196,7 @@ RunIntrinsicCalibration::RunIntrinsicCalibration(const std::filesystem::path& im
  * @param cap
  * @return double 
  */
-double RunIntrinsicCalibration::get_initial_pose(Capture& cap)
+double IntrinsicCalibration::get_initial_pose(Capture& cap)
 {
    // make sure that init_flat_asymmetric_pattern (or similar function) was called before
    assert(cap.observed_points.size() == metric_pattern_points.size());
@@ -201,21 +222,21 @@ double RunIntrinsicCalibration::get_initial_pose(Capture& cap)
    return update_initial_error(cap);
 }
 
-double RunIntrinsicCalibration::update_initial_error(Capture& cap)
+double IntrinsicCalibration::update_initial_error(Capture& cap)
 {
    bool use_initial_pose = true;
    cap.initial_error = get_error(cap, use_initial_pose, K_initial);
    return cap.initial_error;
 }
 
-double RunIntrinsicCalibration::update_optimized_error(Capture& cap)
+double IntrinsicCalibration::update_optimized_error(Capture& cap)
 {
    bool use_initial_pose = false;
    cap.optimized_error = get_error(cap, use_initial_pose, K_optimized, dist_coeffs_optimized);
    return cap.optimized_error;
 }
 
-double RunIntrinsicCalibration::get_error(Capture& cap, bool initial, cv::Mat cam_matrix, const cv::Mat dist_coeffs)
+double IntrinsicCalibration::get_error(Capture& cap, bool initial, cv::Mat cam_matrix, const cv::Mat dist_coeffs)
 {
    assert(metric_pattern_points.size() == cap.observed_points.size());
    assert(metric_pattern_points.size() > 0);
@@ -245,8 +266,14 @@ double RunIntrinsicCalibration::get_error(Capture& cap, bool initial, cv::Mat ca
    return mean_error;
 }
 
-double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::path& img_directory, size_t* num_images_in_dir)
+double IntrinsicCalibration::collect_pattern_views(const std::filesystem::path& img_directory, size_t* num_images_in_dir)
 {
+   if (metric_pattern_points.empty())
+   {
+      cerr << "No pattern points defined. Please call initialize_metric_pattern() or similar function" << endl;
+      throw std::logic_error("No pattern points defined");
+   }
+
    captures.clear();
    double err_sum = 0;
 
@@ -272,7 +299,7 @@ double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::pat
       }
 
 
-      // get pixel positions of circles
+      // get pixel positions of marker features (depends on marker type)
       if (!extract_pattern(cap))
       {
          // cerr << "no pattern found in image " << cap.filename << endl;
@@ -331,8 +358,6 @@ double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::pat
          }
       }
 
-
-
       // compute initial position and its error
       double err = get_initial_pose(cap);
 
@@ -365,16 +390,13 @@ double RunIntrinsicCalibration::collect_pattern_views(const std::filesystem::pat
 
 
    if (num_images_in_dir){ *num_images_in_dir = img_cnt;}
+   initial_mean_error = mean_error;
    return mean_error;
 }
 
 
-bool RunIntrinsicCalibration::extract_pattern(Capture& cap) 
+bool OpenCVAsymmetricCircleGridCalibration::visualize_detection(const Capture& cap)
 {
-   // TODO: BlobDetectorParams, Thresholding preporcessing etc.
-   cap.pattern_visible = cv::findCirclesGrid(cap.img, pattern_shape, cap.observed_points, cv::CALIB_CB_ASYMMETRIC_GRID);
-
-   { // create debug image
       cv::Mat img_cp = cap.img.clone();
       cv::drawChessboardCorners(img_cp, pattern_shape, cap.observed_points, cap.pattern_visible);
 
@@ -385,48 +407,64 @@ bool RunIntrinsicCalibration::extract_pattern(Capture& cap)
          // show first two points to make order visible
          cv::circle(img_cp, cap.observed_points[0], 10, cv::Scalar(0, 0, 255), 2);
          cv::circle(img_cp, cap.observed_points[1], 10, cv::Scalar(0, 255, 0), 2);
-         debug_file_name = debug_directory/("pattern__" + cap.filename+".png");
+         debug_file_name = output_dir/("pattern__" + cap.filename+".png");
       }else
       {
          // otherwise print text to show that image was processed
          cv::putText(img_cp, "pattern not visible", cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
-         debug_file_name = debug_directory/("no_pattern__" + cap.filename+".png");
+         debug_file_name = output_dir/("no_pattern__" + cap.filename+".png");
       }
 
-      cv::imwrite(debug_file_name, img_cp);
-   }
+      return cv::imwrite(debug_file_name, img_cp);
+}
+
+
+
+bool OpenCVAsymmetricCircleGridCalibration::extract_pattern(Capture& cap) 
+{
+   // TODO: BlobDetectorParams, Thresholding preporcessing etc.
+   cap.pattern_visible = cv::findCirclesGrid(cap.img, pattern_shape, cap.observed_points, cv::CALIB_CB_ASYMMETRIC_GRID);
+
+   visualize_detection(cap);
    
    return cap.pattern_visible;
 }
 
 
-std::vector<cv::Point3f> RunIntrinsicCalibration::init_flat_asymmetric_pattern(cv::Size shape, double square_size)
+void OpenCVAsymmetricCircleGridCalibration::initialize_metric_pattern(cv::Size shape, double square_size_m)
 {
-   // assuming opencv assymetric pattern
-   std::vector<cv::Point3f> flat_pattern_points;
-   flat_pattern_points.resize(shape.width*shape.height);
+   cout << "Searching for OpenCV Asymmetric Circle Grid calibration pattern with shape " << shape << " and square size " << square_size_m*1000 << "mm" << endl;
+   if (square_size_m > 0.2)
+   {
+      cout << "WARNING: square size is larger than 20cm, are you sure?" << endl;
+   }
 
-   // assert(shape.width > 1);
-   // assert(shape.height % 2 == 1); // enforcing asymmetric pattern
-   assert(square_size > 0.0);
-   assert(square_size < 0.2); // enforcing reasonable size in meters
+
+   pattern_shape = shape;
+   square_size_m = square_size_m;
+
+   metric_pattern_points.clear();
+   metric_pattern_points.resize(shape.width*shape.height);
+
+   assert(shape.width > 1);
+   assert(shape.height % 2 == 1); // enforcing asymmetric pattern
+   assert(square_size_m > 0.0);
+   assert(square_size_m < 0.2); // enforcing reasonable size in meters
 
    size_t i = 0;
    for (int y = 0; y < shape.height; ++y) {
       for (int x = 0; x < shape.width; ++x) {  
-         float px = x * square_size + (y % 2) * square_size / 2;
-         float py = y * square_size / 2;
-         flat_pattern_points[i] = {px, py, 0.};
-         // cout << "x " << x << " y " << y << " px " << px << " py " << py << endl;
+         float px = x * square_size_m + (y % 2) * square_size_m / 2;
+         float py = y * square_size_m / 2;
+         metric_pattern_points[i] = {px, py, 0.};
          ++i;
       }
    }
 
-   return flat_pattern_points;
 }
 
 
-void RunIntrinsicCalibration::visualize_projections(const Capture& cap)
+void IntrinsicCalibration::visualize_projections(const Capture& cap)
 {
    assert(cap.projected_initial.size() == cap.projected_opt.size());
 
@@ -438,16 +476,15 @@ void RunIntrinsicCalibration::visualize_projections(const Capture& cap)
       cv::circle(img_cp, cap.projected_opt[i], 2, cv::Scalar(0, 255, 0), 2);
       // cv::line(img_cp, cap.projected_initial[i], cap.projected_opt[i], cv::Scalar(255, 0, 0), 2);
    }
-   string filename = debug_directory/("projections__" + cap.filename+".png");
+   string filename = output_dir/("projections__" + cap.filename+".png");
    cv::imwrite(filename, img_cp);
 }
 
-void RunIntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
+void IntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
 {
    vector<vector<cv::Point3f>> object_points;
    vector<vector<cv::Point2f>> image_points;
    vector<cv::Mat> rvecs, tvecs;
-   // vector<double> per_view_errors;
    
    for (size_t i = 0; i < captures.size(); ++i)
    {

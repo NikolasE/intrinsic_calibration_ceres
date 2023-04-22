@@ -25,7 +25,13 @@ int main(int argc, char** argv) {
   // 800: 27.16
   // 1000: 6.34
 
-  RunIntrinsicCalibration calib = RunIntrinsicCalibration(p, 4, 15, 0.035);
+  std::filesystem::path output_dir = p / "output";
+
+  OpenCVAsymmetricCircleGridCalibration calib(output_dir);
+  calib.initialize_metric_pattern(cv::Size(4, 15), 0.035);
+  calib.collect_pattern_views(p);
+  calib.run_optimization(true);
+
 
   return 0;
 }
