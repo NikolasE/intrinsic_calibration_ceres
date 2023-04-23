@@ -1,3 +1,7 @@
 build
-calib_images
+
+# ignore debug images
+no_pattern*
+pattern_*
+projections_*
 

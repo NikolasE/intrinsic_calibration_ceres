@@ -40,10 +40,22 @@ struct Capture {
 
 class IntrinsicCalibration {
 public:
+
+    /**
+     * @brief Construct a new Intrinsic Calibration object
+     * 
+     * @param output_directory for debug images and optimized parameters
+     */
     IntrinsicCalibration(const std::filesystem::path& output_directory);
 
-
-    bool run_optimization(bool optimize_distortion = true);
+    /**
+     * @brief Main Function of the calibration. Uses Ceres to optimize the camera parameters.
+     *        Writes the optimized parameters to the output directory.
+     * 
+     * @param optimize_distortion flag to enable/disable distortion optimization
+     * @return final reprojection error
+     */
+    double run_optimization(bool optimize_distortion = true);
 
     /**
      * @brief pattern points in metric coordinates and in the pattern's coordinate system
@@ -51,7 +63,6 @@ public:
      * 
      */
     std::vector<cv::Point3f> metric_pattern_points; 
-
 
     /**
      * @brief Creates a visualization of the projected points (initial and optimized)
@@ -62,7 +73,6 @@ public:
      */
     bool visualize_projections(const Capture& cap);
 
-
     /**
      * @brief Runs opencv's calibration function using K_initial and the Capture's initial pose to 
      *        compare the results to the Ceres-Optimization. 
@@ -72,14 +82,12 @@ public:
      */
     double opencv_calibrate_camera(bool optimize_distortion = false);
 
-
     /**
      * @brief Update initial error for a capture
      * 
      * @param cap computed error (also stored in cap.initial_error)
      */
     double update_initial_error(Capture& cap);
-
 
     /**
      * @brief Update optimized error for a capture
@@ -88,14 +96,12 @@ public:
      */
     double update_optimized_error(Capture& cap);
 
-
     /**
-     * @brief Collection of all captures. Each with one image and a corresponding observation
-     * 
+     * @brief Collection of all captures. Each with one image and a corresponding observation. 
+     *        Images in which no pattern was detected are not stored here. 
      */
     std::vector<Capture> captures;
 
-    
     /**
      * @brief Find pattern in the Capture's image and store the extracted points in cap.observed_points. 
      *        This function depends on the used pattern type and is implemented in the derived classes.
@@ -111,12 +117,36 @@ public:
      *        The first image is used to initialize the focal length by evaluating multiple values and 
      *        choosing the one with the lowest reprojection error.
      *        Before this function is called, the pattern's metric points must be set.
+     *        TODO: extract estimation of focal length or support optional focal length input
+     *        TODO: make computation of initial pose optional because problem very often also converges without it
      * 
      * @param img_directory directory containing images
      * @param num_images_in_dir if not nullptr, the number of images in the directory is stored here
      * @return double mean reprojection error after computing initial pose with guessed focal length and no distortion
      */
     double collect_pattern_views(const std::filesystem::path& img_directory, size_t* num_images_in_dir = nullptr);
+
+
+    /**
+     * @brief Set the trivial extrinsic guess object. The pattern is assumed to be in the xy-plane at a distance of z_distance. 
+     *        rvec[2] is set to PI to make it look towards camera
+     * 
+     * @param z_distance 
+     */
+    void set_trivial_extrinsic_guess(double z_distance = 1.0);
+
+
+    /**
+     * @brief Load test case from the given directory. The directory must contain a 'info.yml' file
+     * 
+     * @param test_case_dir 
+     * @param add_noise if true, noise is added to the perfect data
+     * TODO: make noise configurable to see how stable the optimization is
+     * 
+     * @return true if test case was loaded successfully
+     */
+    bool load_test_case(const std::filesystem::path& test_case_dir, bool add_noise = false);
+
 
     /**
      * @brief Compute initial pose of pattern in the given capture using the initial guess for the focal length and
@@ -179,7 +209,6 @@ private:
      */
     ceres::Problem problem;
 
-
     /**
      * @brief Helper function to set the bounds for a parameter with a given deviation ratio
      * 
@@ -194,7 +223,6 @@ private:
         problem.SetParameterUpperBound(params, index, max);
     }
 
-
     /**
      * @brief Helper function to set min and max bounds for a parameter
      * 
@@ -207,8 +235,6 @@ private:
         problem.SetParameterLowerBound(params, index, min);
         problem.SetParameterUpperBound(params, index, max);
     }
-
-
 };
 
 
@@ -257,6 +283,7 @@ public:
     
     /**
      * @brief Extract pattern points from the given capture by calling cv::findCirclesGrid(...,cv::CALIB_CB_ASYMMETRIC_GRID)
+     *        [To support symmetric patterns, we would only need to call cv::findCirclesGrid(...,cv::CALIB_CB_SYMMETRIC_GRID)]
      * 
      * @param cap 
      * @return true iff pattern was detected

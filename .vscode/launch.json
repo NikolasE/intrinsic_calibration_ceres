@@ -8,9 +8,10 @@
             "name": "C++ Launch (GDB)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/run_calib",
+            // "program": "${workspaceFolder}/build/run_calib",
             // "program": "${workspaceFolder}/build/capture_images",
-
+            // "program": "${workspaceFolder}/build/generate_synth_data",
+            "program": "${workspaceFolder}/build/hello_test",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

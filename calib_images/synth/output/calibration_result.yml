@@ -1,0 +1,12 @@
+%YAML:1.0
+---
+with_distortion: 0
+observation_cnt: 51
+initial_error: 1.5914864827219843e-01
+optimized_error: 1.6008497022215604e-01
+K: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 9.9811190772008956e+02, 0., 6.4001610805580287e+02, 0.,
+       9.9823166010531531e+02, 3.5832346828753771e+02, 0., 0., 1. ]

@@ -13,7 +13,7 @@ IntrinsicCalibration::IntrinsicCalibration(const std::filesystem::path& output_d
 }
 
 
-bool IntrinsicCalibration::run_optimization(bool optimize_distortion)
+double IntrinsicCalibration::run_optimization(bool optimize_distortion)
 {
    if (captures.empty())
    {
@@ -23,6 +23,9 @@ bool IntrinsicCalibration::run_optimization(bool optimize_distortion)
 
    cout << "Starting optimization " << (optimize_distortion ? "with" : "without") << " distortion" << endl;
    
+
+   cout << "initial K matrix: " << endl << K_initial << endl;
+
 
    size_t param_cnt_distortion = 5; // k1, k2, p1, p2, k3
 
@@ -137,7 +140,7 @@ bool IntrinsicCalibration::run_optimization(bool optimize_distortion)
    K_optimized.at<double>(1, 2) = parameters[3]*height;
 
    
-   cout << "optimzied camera matrix " << endl << K_optimized << endl;
+   cout << "optimized camera matrix " << endl << K_optimized << endl;
    
    if (optimize_distortion)
    {
@@ -170,9 +173,17 @@ bool IntrinsicCalibration::run_optimization(bool optimize_distortion)
 
    optimized_mean_error = err_sum/used_capture_cnt;
 
-   printf("Initial error was %.2f\n", initial_mean_error);
-   printf("Optimized error is %.2f\n", optimized_mean_error);
-   printf("improvement is %.2f%%\n", 100*(initial_mean_error-optimized_mean_error)/initial_mean_error);
+   if (initial_mean_error > 0)
+   {
+      printf("Initial error was %.2f\n", initial_mean_error);
+      printf("Optimized error is %.2f\n", optimized_mean_error);
+      printf("improvement is %.2f%%\n", 100*(initial_mean_error-optimized_mean_error)/initial_mean_error);
+   }else
+   {
+      // for test cases with optimal data, initial error is 0
+      printf("Optimized error is %.2f\n", optimized_mean_error);
+   }
+
 
    for (const auto&c: captures)
    {
@@ -190,7 +201,7 @@ bool IntrinsicCalibration::run_optimization(bool optimize_distortion)
    }
 
    fs << "with_distortion" << optimize_distortion;
-   fs << "observation_cnt" << used_capture_cnt;
+   fs << "observation_cnt" << int(used_capture_cnt);
    if (optimize_distortion)
    {
       fs << "distortion_coeffs" << dist_coeffs_optimized;
@@ -202,8 +213,26 @@ bool IntrinsicCalibration::run_optimization(bool optimize_distortion)
 
    cout << "Wrote calibration results to " << results_filename << endl;
 
+   // get range of values in captures' rvecs: [used to get bounds for synthetic data]
+   // cv::Mat rvec_min = cv::Mat::zeros(3, 1, CV_64F);
+   // cv::Mat rvec_max = cv::Mat::zeros(3, 1, CV_64F);
+   // rvec_min.setTo(100);
+   // rvec_max.setTo(-100);
+   // for (const auto&c: captures)
+   // {
+   //    for (int i=0; i<3; ++i)
+   //    {
+   //       rvec_min.at<double>(i) = std::min(rvec_min.at<double>(i), c.rvec_opt.at<double>(i));
+   //       rvec_max.at<double>(i) = std::max(rvec_max.at<double>(i), c.rvec_opt.at<double>(i));
+   //    }
+   // }
+   // cout << "rvec range: " << rvec_min.t() << " -> " << rvec_max.t() << endl;
 
-   return true;
+
+   fs.release();
+
+
+   return optimized_mean_error;
 }
 
 
@@ -282,6 +311,90 @@ double IntrinsicCalibration::get_error(Capture& cap, bool initial, cv::Mat cam_m
    double mean_error = err_sum / projected_points.size();
    return mean_error;
 }
+
+
+
+bool IntrinsicCalibration::load_test_case(const std::filesystem::path& test_case_dir, bool add_noise)
+{
+   // parse test case file
+   std::filesystem::path test_case_file = test_case_dir / "info.yml";
+   cv::FileStorage fs(test_case_file.string(), cv::FileStorage::READ);
+   if (!fs.isOpened())
+   {
+      cerr << "Could not open test case file " << test_case_file << endl;
+      return false;
+   }
+
+   double fx, fy, cx, cy;
+   fs["fx"] >> fx;
+   fs["fy"] >> fy;
+   fs["cx"] >> cx;
+   fs["cy"] >> cy;
+
+   cv::Mat distortion;
+   fs["distortion"] >> distortion;
+
+   int capture_count;
+   fs["capture_cnt"] >> capture_count;
+   assert(capture_count > 0);
+
+   cv::Size image_size;
+   // cv::Size pattern_size;
+   // double square_size;
+   fs["image_size"] >> image_size;
+   // fs["pattern_shape"] >> pattern_size;
+   // fs["square_size"] >> square_size;
+
+   fs["metric_pattern_points"] >> metric_pattern_points;
+
+   width = image_size.width;
+   height = image_size.height;
+
+   // load images
+   captures.clear();
+   for (int i=0; i<capture_count; ++i)
+   {
+      string prefix = "image_" + std::to_string(i);
+
+      Capture cap(prefix);
+
+      fs[prefix + "_image_points"] >> cap.observed_points;
+      fs[prefix + "_rvec"] >> cap.rvec_initial;
+      fs[prefix + "_tvec"] >> cap.tvec_initial;
+
+
+      if (add_noise)
+      {
+        cap.tvec_initial.at<double>(2) += 0.2;
+      }
+
+      // copy observed points into projected_initial
+      cap.projected_initial = cap.observed_points;
+
+      cap.img = cv::imread((test_case_dir / (prefix + ".png")).string());
+
+
+      captures.push_back(cap);
+   }
+
+   initial_mean_error = 0;
+
+
+   // also change focal length
+   K_initial = (cv::Mat_<double>(3,3) << fx, 0, cx, 0, fy, cy, 0, 0, 1);
+
+   if (add_noise)
+   {
+      K_initial.at<double>(0,0) *= 1.2;
+      K_initial.at<double>(1,1) *= 0.8;
+   }
+
+
+   return true;
+}
+
+
+
 
 double IntrinsicCalibration::collect_pattern_views(const std::filesystem::path& img_directory, size_t* num_images_in_dir)
 {
@@ -494,6 +607,19 @@ bool IntrinsicCalibration::visualize_projections(const Capture& cap)
    return cv::imwrite(filename, img_cp);
 }
 
+void IntrinsicCalibration::set_trivial_extrinsic_guess(double z_distance)
+{
+   for (size_t i = 0; i < captures.size(); ++i)
+   {
+      captures[i].rvec_initial = cv::Mat::zeros(3, 1, CV_64FC1);
+      captures[i].rvec_initial.at<double>(2) = M_PI;
+
+      captures[i].tvec_initial = cv::Mat::zeros(3, 1, CV_64FC1);
+      captures[i].tvec_initial.at<double>(2) = z_distance;
+   }
+}
+
+
 double IntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
 {
    vector<vector<cv::Point3f>> object_points;
@@ -549,3 +675,5 @@ double IntrinsicCalibration::opencv_calibrate_camera(bool optimize_distortion)
 
    // cout << "Reprojection error for OpenCV Solution " << err << endl; // same as rms**2
 }
+
+

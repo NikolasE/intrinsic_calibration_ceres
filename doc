@@ -1,0 +1,10 @@
+No Distortion:
+
+Initial error was 2.22
+Optimized error is 1.54
+improvement is 30.68%
+Running OpenCV Calibration for comparison
+RMS error reported by cv::calibrateCamera: 1.46535
+Optimized K matrix: 
+[1118.044766991233, 0, 961.0113349766884;
+ 0, 1114.872964489565, 510.7871749749437;
