@@ -22,6 +22,11 @@ We estimate a good initial focal length by estimating the pose of the pattern in
 This focal length is then used to estimate the initial pose for all views. 
 This approach works nicely (even though cv::solvePNP is a black box) and creates a suprisingly well initial parameterization, but takes some seconds to set up. 
 
+## Parameterization
+The pose is defined by a position and a 3dof Rodrigues-orientation. 
+Intrinsics (fx, fy, cx, cy) are normalized by the image width or height (e.g. cx=cy=0.5) to have the scale of all parameters (poses, intrinsics, distortion) in a similar range. 
+
+
 ## Comparison to cv::calibrateCamera
 This implementation finds very similar values to cv::calibrateCamera. The cause of the deviation is not clear, it would be interesting to find out, if it is only a numerical difference caused by different optimization approaches. (We did not look at the original implementation yet to build an independent solution).
 
