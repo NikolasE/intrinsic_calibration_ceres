@@ -12,11 +12,11 @@
  * @brief The PatternViewReprojectionError struct can be used in a ceres::CostFunction
  *        to compute the reprojection error of a pattern view. For a given pattern pose and
  *        camera intrinsics, the error is the difference between the measured and the projected points. 
- *        The pattern pose is given as a 6D vector (3D Roditues rotation and 3D translation) and the camera intrinsics
- *        are given as a 5D vector (fx, fy, cx, cy, [k1, k2, p1, p2, k3]). The distortion is only used if optimize_distortion is true.
- *        fx, fy, cx, cy are normalized to be in the range [0, 1] and are scaled by the image width and height in the constructor.
- *        The error vector has the same size as the number of pattern points. For each point, the squared error is computed  
- *        This class supports only no or five distortion parameters (openCV plum bob model)
+ *        The pattern pose is given as a 6D vector (3D Rodrigues rotation and 3D translation) and the camera intrinsics
+ *        are given as a 4D or 9D vector (fx, fy, cx, cy, [k1, k2, p1, p2, k3]). The distortion is only used if optimize_distortion is true.
+ *        fx, fy, cx, cy are normalized by the respective image dimension to have all parameters in the same range.
+ *        The error vector has the same size as the number of pattern points. For each point, the squared reprojection error is computed  
+ *        This class supports only no or five distortion parameters (openCV plump-bob model)
  */
 struct PatternViewReprojectionError {
 
