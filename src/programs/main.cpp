@@ -5,6 +5,8 @@
 using namespace std;
 using namespace std::filesystem;
 
+
+
 int main(int argc, char** argv) {
 
   google::InitGoogleLogging(argv[0]);
@@ -30,10 +32,9 @@ int main(int argc, char** argv) {
 
   calib.set_trivial_extrinsic_guess();
 
-
   double err = calib.run_optimization(with_distortion);
   cout << "Error: " << err << endl; // should be zero for perfect test data
-  
+
   // bool add_noise = true;
   // calib.load_test_case(p, add_noise);
   // double err = calib.run_optimization(with_distortion);

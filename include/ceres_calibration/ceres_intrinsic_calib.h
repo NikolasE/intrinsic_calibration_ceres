@@ -119,6 +119,7 @@ public:
      *        Before this function is called, the pattern's metric points must be set.
      *        TODO: extract estimation of focal length or support optional focal length input
      *        TODO: make computation of initial pose optional because problem very often also converges without it
+     *        TODO: cache extracted pixel positions in a file to speed up subsequent runs
      * 
      * @param img_directory directory containing images
      * @param num_images_in_dir if not nullptr, the number of images in the directory is stored here
@@ -184,6 +185,13 @@ public:
      * @return true if debug image was written to 'output_dir'
      */
     virtual bool visualize_detection(const Capture& cap) = 0;
+
+
+    /**
+     * @brief summary of optimization (could be private, but is public for now for debugging and testing)
+     * 
+     */
+    ceres::Solver::Summary summary;
 
 protected:
     std::filesystem::path output_dir;

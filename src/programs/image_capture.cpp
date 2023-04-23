@@ -8,6 +8,11 @@
 using namespace std;
 
 
+/**
+ * @brief Capture images from webcam and save them to a file. Press any key to save the image, ESC to exit
+ * 
+ * @return int 0
+ */
 int main(){
     cv::VideoCapture cap(0);
     if(!cap.isOpened()){
@@ -22,8 +27,6 @@ int main(){
         cap >> frame;
 
         cv::flip(frame, frame, 1);
-
-
         cv::imshow("Frame", frame);
         char c = (char)cv::waitKey(2);
         std::cout << int(c) << std::endl;

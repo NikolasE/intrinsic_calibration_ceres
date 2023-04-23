@@ -58,6 +58,7 @@ double IntrinsicCalibration::run_optimization(bool optimize_distortion)
       }
    }
    
+   problem = ceres::Problem(); // reset problem
 
    problem.AddParameterBlock(parameters, param_cnt_intrinsics);
    
@@ -118,10 +119,11 @@ double IntrinsicCalibration::run_optimization(bool optimize_distortion)
    ceres::Solver::Options options;
    options.minimizer_progress_to_stdout = true;
    options.max_num_iterations = 500;
+   options.num_threads = 4;
    // options.linear_solver_type = ceres::DENSE_SCHUR;
    options.linear_solver_type = ceres::DENSE_QR;
    
-   ceres::Solver::Summary summary;
+   
 
    ceres::Solve(options, &problem, &summary);
 
@@ -228,10 +230,7 @@ double IntrinsicCalibration::run_optimization(bool optimize_distortion)
    // }
    // cout << "rvec range: " << rvec_min.t() << " -> " << rvec_max.t() << endl;
 
-
    fs.release();
-
-
    return optimized_mean_error;
 }
 
@@ -612,7 +611,8 @@ void IntrinsicCalibration::set_trivial_extrinsic_guess(double z_distance)
    for (size_t i = 0; i < captures.size(); ++i)
    {
       captures[i].rvec_initial = cv::Mat::zeros(3, 1, CV_64FC1);
-      captures[i].rvec_initial.at<double>(2) = M_PI;
+      // HACK: assuming pattern's z axis is pointing towards camera [breaks abstraction from pattern definition]
+      captures[i].rvec_initial.at<double>(2) = M_PI; 
 
       captures[i].tvec_initial = cv::Mat::zeros(3, 1, CV_64FC1);
       captures[i].tvec_initial.at<double>(2) = z_distance;
